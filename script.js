@@ -9,7 +9,7 @@
    API CONFIGURATION
 ========================================================= */
 
-const API_BASE_URL = "https://upupway-ai.onrender.com/";
+const API_BASE_URL = "https://upupway-ai.onrender.com";
 
 
 /* =========================================================
