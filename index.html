@@ -1,0 +1,1299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <meta
+        name="description"
+        content="UpUpway AI — AI-powered crypto market intelligence and paper trading platform."
+    >
+
+    <meta
+        name="theme-color"
+        content="#08080d"
+    >
+
+    <title>UpUpway AI | Trading Intelligence</title>
+
+    <link
+        rel="stylesheet"
+        href="style.css"
+    >
+</head>
+
+<body>
+
+<!-- =====================================================
+     HEADER
+===================================================== -->
+
+<header class="site-header">
+
+    <div class="header-inner">
+
+        <a
+            href="#dashboard"
+            class="brand"
+        >
+
+            <div class="brand-icon">
+                ↑
+            </div>
+
+            <div class="brand-name">
+
+                <strong>
+                    UpUpway
+                </strong>
+
+                <span>
+                    AI
+                </span>
+
+            </div>
+
+        </a>
+
+
+        <nav
+            class="main-nav"
+            id="mainNav"
+        >
+
+            <a href="#dashboard">
+                Dashboard
+            </a>
+
+            <a href="#markets">
+                Markets
+            </a>
+
+            <a href="#signals">
+                AI Signals
+            </a>
+
+            <a href="#trading">
+                Trading
+            </a>
+
+            <a href="#portfolio">
+                Portfolio
+            </a>
+
+            <a href="#backtest">
+                Strategy Lab
+            </a>
+
+        </nav>
+
+
+        <div class="header-right">
+
+            <div class="paper-badge">
+
+                <span class="live-dot"></span>
+
+                PAPER MODE
+
+            </div>
+
+
+            <button
+                class="menu-button"
+                id="menuButton"
+                type="button"
+                aria-label="Open menu"
+            >
+                ☰
+            </button>
+
+        </div>
+
+    </div>
+
+</header>
+
+
+<!-- =====================================================
+     MAIN
+===================================================== -->
+
+<main id="dashboard">
+
+
+<!-- =====================================================
+     HERO
+===================================================== -->
+
+<section class="hero">
+
+    <div class="hero-content">
+
+        <span class="eyebrow">
+            AI MARKET INTELLIGENCE
+        </span>
+
+
+        <h1>
+            Trade smarter.
+            <span>
+                Move Up.
+            </span>
+        </h1>
+
+
+        <p>
+            UpUpway AI analyzes cryptocurrency market
+            conditions and transforms market data into
+            actionable trading intelligence.
+        </p>
+
+
+        <div class="hero-buttons">
+
+            <a
+                href="#signals"
+                class="button button-primary"
+            >
+                View AI Signal
+            </a>
+
+
+            <a
+                href="#trading"
+                class="button button-secondary"
+            >
+                Trading Center
+            </a>
+
+        </div>
+
+    </div>
+
+
+    <div class="hero-engine">
+
+        <div class="ai-orb">
+            <span>
+                AI
+            </span>
+        </div>
+
+
+        <div>
+
+            <span class="mini-label">
+                UPUPWAY ENGINE
+            </span>
+
+            <strong id="aiStatus">
+                Connecting...
+            </strong>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+<!-- =====================================================
+     SYSTEM STATUS
+===================================================== -->
+
+<section class="status-strip">
+
+    <div class="status-item">
+
+        <span class="live-dot"></span>
+
+        <span id="connectionText">
+            Connecting to backend...
+        </span>
+
+    </div>
+
+
+    <div class="status-item">
+
+        <span>
+            MODE
+        </span>
+
+        <strong>
+            PAPER TRADING
+        </strong>
+
+    </div>
+
+
+    <div class="status-item">
+
+        <span>
+            ENGINE
+        </span>
+
+        <strong>
+            UPUPWAY CORE
+        </strong>
+
+    </div>
+
+</section>
+
+
+<!-- =====================================================
+     MARKETS
+===================================================== -->
+
+<section
+    class="section"
+    id="markets"
+>
+
+    <div class="section-header">
+
+        <div>
+
+            <span class="eyebrow">
+                LIVE MARKET
+            </span>
+
+            <h2>
+                Market Overview
+            </h2>
+
+        </div>
+
+    </div>
+
+
+    <div class="market-grid">
+
+
+        <!-- BTC -->
+
+        <article class="market-card market-primary">
+
+            <div class="market-top">
+
+                <div class="asset">
+
+                    <div class="asset-icon bitcoin">
+                        ₿
+                    </div>
+
+                    <div>
+
+                        <strong>
+                            Bitcoin
+                        </strong>
+
+                        <span>
+                            BTC / USDT
+                        </span>
+
+                    </div>
+
+                </div>
+
+
+                <span class="primary-tag">
+                    PRIMARY
+                </span>
+
+            </div>
+
+
+            <div
+                class="market-price"
+                id="btcPrice"
+            >
+                $--,---.--
+            </div>
+
+
+            <div
+                class="market-change"
+                id="btcChange"
+            >
+                --
+            </div>
+
+
+            <div class="market-footer">
+
+                <div>
+
+                    <span>
+                        DATA SOURCE
+                    </span>
+
+                    <strong id="dataSource">
+                        --
+                    </strong>
+
+                </div>
+
+
+                <div>
+
+                    <span>
+                        24H VOLUME
+                    </span>
+
+                    <strong id="btcVolume">
+                        --
+                    </strong>
+
+                </div>
+
+            </div>
+
+        </article>
+
+
+        <!-- ETH -->
+
+        <article class="market-card">
+
+            <div class="market-top">
+
+                <div class="asset">
+
+                    <div class="asset-icon ethereum">
+                        Ξ
+                    </div>
+
+                    <div>
+
+                        <strong>
+                            Ethereum
+                        </strong>
+
+                        <span>
+                            ETH / USDT
+                        </span>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <div
+                class="market-price"
+                id="ethPrice"
+            >
+                $--,---.--
+            </div>
+
+
+            <div
+                class="market-change neutral"
+                id="ethChange"
+            >
+                --
+            </div>
+
+        </article>
+
+
+        <!-- SOL -->
+
+        <article class="market-card">
+
+            <div class="market-top">
+
+                <div class="asset">
+
+                    <div class="asset-icon solana">
+                        S
+                    </div>
+
+                    <div>
+
+                        <strong>
+                            Solana
+                        </strong>
+
+                        <span>
+                            SOL / USDT
+                        </span>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <div
+                class="market-price"
+                id="solPrice"
+            >
+                $---.--
+            </div>
+
+
+            <div
+                class="market-change neutral"
+                id="solChange"
+            >
+                --
+            </div>
+
+        </article>
+
+    </div>
+
+</section>
+
+
+<!-- =====================================================
+     AI SIGNAL
+===================================================== -->
+
+<section
+    class="section"
+    id="signals"
+>
+
+    <div class="section-header">
+
+        <div>
+
+            <span class="eyebrow">
+                UPUPWAY INTELLIGENCE
+            </span>
+
+            <h2>
+                AI Trading Signal
+            </h2>
+
+        </div>
+
+    </div>
+
+
+    <div class="signal-card">
+
+        <div class="signal-main">
+
+            <span class="mini-label">
+                CURRENT MARKET DECISION
+            </span>
+
+
+            <div
+                class="signal-action"
+                id="signalAction"
+            >
+                HOLD
+            </div>
+
+
+            <p id="signalDescription">
+                Waiting for market analysis...
+            </p>
+
+        </div>
+
+
+        <div class="confidence-box">
+
+            <span>
+                AI CONFIDENCE
+            </span>
+
+
+            <strong id="confidenceValue">
+                --%
+            </strong>
+
+
+            <div class="confidence-track">
+
+                <div
+                    id="confidenceBar"
+                    class="confidence-fill"
+                ></div>
+
+            </div>
+
+        </div>
+
+
+        <div class="signal-metrics">
+
+            <div>
+
+                <span>
+                    MARKET TREND
+                </span>
+
+                <strong id="marketTrend">
+                    --
+                </strong>
+
+            </div>
+
+
+            <div>
+
+                <span>
+                    RSI
+                </span>
+
+                <strong id="rsiValue">
+                    --
+                </strong>
+
+            </div>
+
+
+            <div>
+
+                <span>
+                    ENGINE
+                </span>
+
+                <strong>
+                    UpUpway Core
+                </strong>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+<!-- =====================================================
+     TRADING CENTER
+===================================================== -->
+
+<section
+    class="section"
+    id="trading"
+>
+
+    <div class="section-header">
+
+        <div>
+
+            <span class="eyebrow">
+                PAPER EXECUTION
+            </span>
+
+            <h2>
+                Trading Center
+            </h2>
+
+        </div>
+
+
+        <div class="paper-status">
+
+            <span class="live-dot"></span>
+
+            Simulation Only
+
+        </div>
+
+    </div>
+
+
+    <div class="trading-grid">
+
+
+        <!-- AUTO TRADING -->
+
+        <article class="trading-card auto-card">
+
+            <div class="card-heading">
+
+                <div>
+
+                    <span class="card-label">
+                        AI AUTO TRADING
+                    </span>
+
+                    <h3 id="autoStatusText">
+                        PAUSED
+                    </h3>
+
+                </div>
+
+
+                <span
+                    class="auto-indicator"
+                    id="autoStatusDot"
+                ></span>
+
+            </div>
+
+
+            <p id="autoStatusDescription">
+                AI automated paper execution is currently
+                paused.
+            </p>
+
+
+            <button
+                type="button"
+                class="button button-primary full-button"
+                id="autoTradingButton"
+            >
+                Activate AI
+            </button>
+
+
+            <div
+                class="trade-message"
+                id="autoMessage"
+            >
+                AI will only execute simulated paper trades.
+            </div>
+
+        </article>
+
+
+        <!-- MANUAL TRADING -->
+
+        <article class="trading-card">
+
+            <div class="card-heading">
+
+                <div>
+
+                    <span class="card-label">
+                        MANUAL EXECUTION
+                    </span>
+
+                    <h3>
+                        Paper Orders
+                    </h3>
+
+                </div>
+
+            </div>
+
+
+            <div class="manual-buttons">
+
+                <button
+                    type="button"
+                    class="trade-button buy"
+                    id="paperBuyButton"
+                >
+                    PAPER BUY
+                </button>
+
+
+                <button
+                    type="button"
+                    class="trade-button sell"
+                    id="paperSellButton"
+                >
+                    PAPER SELL
+                </button>
+
+            </div>
+
+
+            <div
+                class="trade-message"
+                id="tradeMessage"
+            >
+                Manual execution uses simulated funds only.
+            </div>
+
+        </article>
+
+
+        <!-- RISK -->
+
+        <article class="trading-card">
+
+            <div class="card-heading">
+
+                <div>
+
+                    <span class="card-label">
+                        RISK CONTROL
+                    </span>
+
+                    <h3>
+                        Protection Layer
+                    </h3>
+
+                </div>
+
+            </div>
+
+
+            <div class="risk-list">
+
+                <div class="risk-item">
+
+                    <span>
+                        Maximum Position
+                    </span>
+
+                    <strong>
+                        10%
+                    </strong>
+
+                </div>
+
+
+                <div class="risk-item">
+
+                    <span>
+                        Minimum Confidence
+                    </span>
+
+                    <strong>
+                        55%
+                    </strong>
+
+                </div>
+
+
+                <div class="risk-item">
+
+                    <span>
+                        Trade Cooldown
+                    </span>
+
+                    <strong>
+                        60 SEC
+                    </strong>
+
+                </div>
+
+
+                <div class="risk-item">
+
+                    <span>
+                        Execution
+                    </span>
+
+                    <strong>
+                        PAPER
+                    </strong>
+
+                </div>
+
+            </div>
+
+        </article>
+
+    </div>
+
+</section>
+
+
+<!-- =====================================================
+     PORTFOLIO
+===================================================== -->
+
+<section
+    class="section"
+    id="portfolio"
+>
+
+    <div class="section-header">
+
+        <div>
+
+            <span class="eyebrow">
+                PAPER ACCOUNT
+            </span>
+
+            <h2>
+                Portfolio
+            </h2>
+
+        </div>
+
+    </div>
+
+
+    <div class="stats-grid">
+
+
+        <article class="stat-card">
+
+            <span>
+                PORTFOLIO VALUE
+            </span>
+
+            <strong id="portfolioValue">
+                $10,000.00
+            </strong>
+
+            <small>
+                Total current paper equity
+            </small>
+
+        </article>
+
+
+        <article class="stat-card">
+
+            <span>
+                P/L
+            </span>
+
+            <strong id="dailyPnl">
+                $0.00
+            </strong>
+
+            <small>
+                Current paper performance
+            </small>
+
+        </article>
+
+
+        <article class="stat-card">
+
+            <span>
+                TOTAL RETURN
+            </span>
+
+            <strong id="totalReturn">
+                0.00%
+            </strong>
+
+            <small>
+                Since account creation
+            </small>
+
+        </article>
+
+
+        <article class="stat-card">
+
+            <span>
+                WIN RATE
+            </span>
+
+            <strong id="winRate">
+                --
+            </strong>
+
+            <small>
+                Completed trades
+            </small>
+
+        </article>
+
+    </div>
+
+</section>
+
+
+<!-- =====================================================
+     POSITION MONITOR
+===================================================== -->
+
+<section class="section">
+
+    <div class="section-header">
+
+        <div>
+
+            <span class="eyebrow">
+                POSITION MONITOR
+            </span>
+
+            <h2>
+                BTC Position
+            </h2>
+
+        </div>
+
+    </div>
+
+
+    <div class="position-grid">
+
+        <div class="position-card">
+
+            <span>
+                CASH
+            </span>
+
+            <strong id="cashBalance">
+                $10,000.00
+            </strong>
+
+        </div>
+
+
+        <div class="position-card">
+
+            <span>
+                BTC HOLDING
+            </span>
+
+            <strong id="positionAmount">
+                0 BTC
+            </strong>
+
+        </div>
+
+
+        <div class="position-card">
+
+            <span>
+                ENTRY PRICE
+            </span>
+
+            <strong id="entryPrice">
+                --
+            </strong>
+
+        </div>
+
+
+        <div class="position-card">
+
+            <span>
+                UNREALIZED P/L
+            </span>
+
+            <strong id="positionPnl">
+                $0.00
+            </strong>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+<!-- =====================================================
+     MARKET CHART
+===================================================== -->
+
+<section class="section">
+
+    <div class="section-header">
+
+        <div>
+
+            <span class="eyebrow">
+                MARKET ANALYSIS
+            </span>
+
+            <h2>
+                BTC / USDT
+            </h2>
+
+        </div>
+
+
+        <div class="chart-tabs">
+
+            <button
+                type="button"
+                class="active"
+            >
+                1H
+            </button>
+
+            <button
+                type="button"
+            >
+                4H
+            </button>
+
+            <button
+                type="button"
+            >
+                1D
+            </button>
+
+            <button
+                type="button"
+            >
+                1W
+            </button>
+
+        </div>
+
+    </div>
+
+
+    <div
+        class="chart-box"
+        id="marketChart"
+    >
+
+        <div class="chart-empty">
+
+            <div class="chart-icon">
+                ↗
+            </div>
+
+            <strong>
+                BTC Market Chart
+            </strong>
+
+            <span>
+                Live market visualization will appear here.
+            </span>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+<!-- =====================================================
+     TRADE HISTORY
+===================================================== -->
+
+<section class="section">
+
+    <div class="section-header">
+
+        <div>
+
+            <span class="eyebrow">
+                EXECUTION LOG
+            </span>
+
+            <h2>
+                Trade History
+            </h2>
+
+        </div>
+
+    </div>
+
+
+    <div
+        class="trade-history"
+        id="tradeHistory"
+    >
+
+        <div class="history-empty">
+
+            <div class="history-icon">
+                ≡
+            </div>
+
+            <strong>
+                No trades yet
+            </strong>
+
+            <span>
+                Paper executions will appear here.
+            </span>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+<!-- =====================================================
+     STRATEGY LAB
+===================================================== -->
+
+<section
+    class="section"
+    id="backtest"
+>
+
+    <div class="section-header">
+
+        <div>
+
+            <span class="eyebrow">
+                STRATEGY LAB
+            </span>
+
+            <h2>
+                Backtesting
+            </h2>
+
+        </div>
+
+    </div>
+
+
+    <div class="backtest-card">
+
+        <div class="form-field">
+
+            <label for="assetSelect">
+                Asset
+            </label>
+
+            <select id="assetSelect">
+
+                <option value="BTC">
+                    BTC / USDT
+                </option>
+
+                <option value="ETH">
+                    ETH / USDT
+                </option>
+
+                <option value="SOL">
+                    SOL / USDT
+                </option>
+
+            </select>
+
+        </div>
+
+
+        <div class="form-field">
+
+            <label for="strategySelect">
+                Strategy
+            </label>
+
+            <select id="strategySelect">
+
+                <option value="RSI">
+                    RSI Strategy
+                </option>
+
+                <option value="MA">
+                    Moving Average
+                </option>
+
+                <option value="AI">
+                    UpUpway AI
+                </option>
+
+            </select>
+
+        </div>
+
+
+        <div class="form-field">
+
+            <label for="initialCapital">
+                Starting Capital
+            </label>
+
+            <input
+                type="number"
+                id="initialCapital"
+                value="10000"
+                min="100"
+                step="100"
+            >
+
+        </div>
+
+
+        <button
+            type="button"
+            class="button button-primary"
+            id="backtestButton"
+        >
+            Run Backtest
+        </button>
+
+    </div>
+
+
+    <div
+        class="backtest-result"
+        id="backtestResult"
+    >
+
+        <span>
+            BACKTEST RESULTS
+        </span>
+
+        <strong>
+            No backtest has been run yet.
+        </strong>
+
+    </div>
+
+</section>
+
+
+</main>
+
+
+<!-- =====================================================
+     FOOTER
+===================================================== -->
+
+<footer class="site-footer">
+
+    <div class="footer-inner">
+
+        <div>
+
+            <div class="footer-brand">
+                ↑ UpUpway AI
+            </div>
+
+            <p>
+                AI-powered market intelligence and
+                simulated trading technology.
+            </p>
+
+        </div>
+
+
+        <div class="footer-warning">
+
+            <strong>
+                PAPER TRADING ONLY
+            </strong>
+
+            <p>
+                This platform currently uses simulated
+                funds. No real-money trades are executed.
+            </p>
+
+        </div>
+
+    </div>
+
+
+    <div class="footer-bottom">
+
+        <span>
+            © 2026 UpUpway AI
+        </span>
+
+        <span>
+            Built for intelligent market research.
+        </span>
+
+    </div>
+
+</footer>
+
+
+<script src="script.js"></script>
+
+</body>
+      </html>
