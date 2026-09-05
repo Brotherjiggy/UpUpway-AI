@@ -1,68 +1,61 @@
-# ============================================================
-# UPUPWAY AI
-# PROFESSIONAL PAPER-TRADING BACKEND
-# FastAPI + resilient market-data caching
-#
-# PAPER TRADING ONLY — NO REAL-MONEY EXCHANGE CONNECTION
-# ============================================================
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
+from collections import deque
 from datetime import datetime, timezone
-import statistics
-import time
 import requests
+import time
+import statistics
+import uuid
 
 
 # ============================================================
-# CONFIGURATION
+# UPUPWAY AI
+# Backend v1.3.0
+# Paper Trading Only
 # ============================================================
 
 APP_NAME = "UpUpway AI"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
+BUILD_ID = "2026-09-05-v1.3.0"
 
 COINGECKO_BASE_URL = "https://api.coingecko.com/api/v3"
+
 REQUEST_TIMEOUT = 15
 
-BTC_ID = "bitcoin"
-ETH_ID = "ethereum"
-SOL_ID = "solana"
-
 # ------------------------------------------------------------
-# MARKET DATA PROTECTION
+# Market-data protection
 # ------------------------------------------------------------
 
-# Keep market data for 5 minutes.
-# The frontend can poll every few seconds without causing
-# a provider request every few seconds.
 MARKET_CACHE_TTL = 300.0
-
-# Never request CoinGecko more often than this.
 PROVIDER_MIN_INTERVAL = 120.0
-
-# Keep stale market data indefinitely as an emergency fallback.
 STALE_MARKET_MAX_AGE = 86400.0
 
-# Historical data can remain cached longer.
 HISTORY_CACHE_TTL = 900.0
-
-# Minimum interval between historical provider requests.
 HISTORY_PROVIDER_MIN_INTERVAL = 600.0
+
+market_cache: Optional[Dict[str, Any]] = None
+market_cache_time = 0.0
+last_market_provider_request = 0.0
+
+historical_cache: Dict[int, Dict[str, Any]] = {}
+last_history_provider_request: Dict[int, float] = {}
+
+# Local rolling BTC price history.
+# This prevents the live signal engine from repeatedly requesting
+# CoinGecko's market_chart endpoint.
+local_price_history = deque(maxlen=500)
 
 
 # ============================================================
-# APP
+# FastAPI
 # ============================================================
 
 app = FastAPI(
     title=APP_NAME,
     version=VERSION,
-    description=(
-        "Professional AI market analysis and "
-        "paper-trading backend."
-    )
+    description="UpUpway AI paper-trading backend."
 )
 
 app.add_middleware(
@@ -75,10 +68,10 @@ app.add_middleware(
 
 
 # ============================================================
-# PAPER ACCOUNT
+# Paper account
 # ============================================================
 
-paper_account: Dict[str, Any] = {
+paper_account = {
     "starting_balance": 10000.0,
     "cash": 10000.0,
     "btc": 0.0,
@@ -88,16 +81,25 @@ paper_account: Dict[str, Any] = {
     "realized_profit_loss": 0.0,
     "unrealized_profit_loss": 0.0,
     "portfolio_value": 10000.0,
-    "daily_start_value": 10000.0,
-    "daily_start_date": None,
 }
 
 
 # ============================================================
-# AUTO TRADING STATE
+# Auto trading
 # ============================================================
 
-auto_trading: Dict[str, Any] = {
+RISK_SETTINGS = {
+    "max_position_percent": 10.0,
+    "minimum_confidence": 55.0,
+    "trade_cooldown_seconds": 60.0,
+    "stop_loss_percent": 3.0,
+    "take_profit_percent": 6.0,
+    "daily_loss_limit_percent": 5.0,
+    "max_consecutive_losses": 3,
+}
+
+
+auto_trading = {
     "enabled": False,
     "last_signal": "NONE",
     "last_action": "NONE",
@@ -106,474 +108,261 @@ auto_trading: Dict[str, Any] = {
     "trades": 0,
     "wins": 0,
     "losses": 0,
-    "consecutive_losses": 0,
 }
 
-
-# ============================================================
-# RISK SETTINGS
-# ============================================================
-
-RISK_SETTINGS: Dict[str, float] = {
-    "max_position_percent": 10.0,
-    "minimum_confidence": 55.0,
-    "trade_cooldown_seconds": 60.0,
-    "stop_loss_percent": 3.0,
-    "take_profit_percent": 6.0,
-    "max_daily_loss_percent": 5.0,
-    "max_consecutive_losses": 3,
-}
-
-
-# ============================================================
-# TRADE HISTORY
-# ============================================================
 
 trade_history: List[Dict[str, Any]] = []
 
 
 # ============================================================
-# MARKET CACHE
+# Helpers
 # ============================================================
 
-market_cache: Dict[str, Any] = {
-    "data": None,
-    "timestamp": 0.0,
-    "provider_timestamp": 0.0,
-    "last_attempt": 0.0,
-    "last_error": None,
-}
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-# ============================================================
-# HISTORY CACHE
-# ============================================================
-
-history_cache: Dict[str, Any] = {}
+def clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(value, maximum))
 
 
-# ============================================================
-# REQUEST MODELS
-# ============================================================
-
-class PaperBuyRequest(BaseModel):
-    confidence: Optional[float] = Field(
-        default=None,
-        ge=0,
-        le=100
-    )
-    reason: Optional[str] = "Manual paper trade"
-
-
-class PaperSellRequest(BaseModel):
-    confidence: Optional[float] = Field(
-        default=None,
-        ge=0,
-        le=100
-    )
-    reason: Optional[str] = "Manual paper trade"
-
-
-class AutoTradingToggleRequest(BaseModel):
-    enabled: bool
-
-
-class BacktestRequest(BaseModel):
-    asset: str = "BTC"
-    strategy: str = "RSI_MA"
-    initial_capital: float = Field(
-        default=10000.0,
-        gt=0
-    )
-
-
-# ============================================================
-# GENERAL HELPERS
-# ============================================================
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def utc_iso() -> str:
-    return utc_now().isoformat()
-
-
-def safe_float(
-    value: Any,
-    default: float = 0.0
-) -> float:
-
+def safe_float(value, default=None):
     try:
         return float(value)
     except (TypeError, ValueError):
         return default
 
 
-def clamp(
-    value: float,
-    minimum: float,
-    maximum: float
-) -> float:
+def record_local_price(price: float):
+    """
+    Store the latest BTC price locally.
 
-    return max(minimum, min(value, maximum))
+    Format:
+    {
+        timestamp: unix timestamp,
+        price: BTC price
+    }
+    """
 
+    if price is None or price <= 0:
+        return
 
-# ============================================================
-# PROVIDER REQUEST
-# ============================================================
+    current_time = time.time()
 
-def coingecko_get(
-    endpoint: str,
-    params: Optional[Dict[str, Any]] = None
-):
+    if local_price_history:
+        last = local_price_history[-1]
 
-    url = f"{COINGECKO_BASE_URL}{endpoint}"
+        # Avoid duplicate snapshots at almost the same moment.
+        if current_time - last["timestamp"] < 1:
+            last["price"] = price
+            return
 
-    try:
-
-        response = requests.get(
-            url,
-            params=params,
-            timeout=REQUEST_TIMEOUT,
-            headers={
-                "Accept": "application/json",
-                "User-Agent": (
-                    "UpUpway-AI/1.2 "
-                    "(paper-trading-platform)"
-                )
-            }
-        )
-
-        if response.status_code == 429:
-
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "CoinGecko rate limit reached."
-                )
-            )
-
-        response.raise_for_status()
-
-        return response.json()
-
-    except HTTPException:
-        raise
-
-    except requests.RequestException as exc:
-
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Market data provider unavailable: "
-                f"{str(exc)}"
-            )
-        )
+    local_price_history.append({
+        "timestamp": current_time,
+        "price": price
+    })
 
 
 # ============================================================
-# FETCH MARKET DATA FROM COINGECKO
+# CoinGecko market data
 # ============================================================
 
-def fetch_market_data_from_provider() -> Dict[str, Any]:
+def fetch_market_from_provider() -> Dict[str, Any]:
+    global last_market_provider_request
 
-    data = coingecko_get(
-        "/simple/price",
-        {
-            "ids": (
-                f"{BTC_ID},{ETH_ID},{SOL_ID}"
-            ),
-            "vs_currencies": "usd",
-            "include_24hr_change": "true",
-        }
-    )
+    url = f"{COINGECKO_BASE_URL}/simple/price"
 
-    btc = data.get(BTC_ID, {})
-    eth = data.get(ETH_ID, {})
-    sol = data.get(SOL_ID, {})
-
-    btc_price = safe_float(
-        btc.get("usd")
-    )
-
-    eth_price = safe_float(
-        eth.get("usd")
-    )
-
-    sol_price = safe_float(
-        sol.get("usd")
-    )
-
-    if btc_price <= 0:
-
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Bitcoin market price is unavailable."
-            )
-        )
-
-    return {
-        "symbol": "BTCUSDT",
-
-        "price": btc_price,
-
-        "change_24h": safe_float(
-            btc.get("usd_24h_change")
-        ),
-
-        "volume_24h": None,
-
-        "source": "CoinGecko",
-
-        "eth_price": eth_price,
-
-        "eth_change_24h": safe_float(
-            eth.get("usd_24h_change")
-        ),
-
-        "sol_price": sol_price,
-
-        "sol_change_24h": safe_float(
-            sol.get("usd_24h_change")
-        ),
-
-        "updated_at": utc_iso(),
+    params = {
+        "ids": "bitcoin,ethereum,solana",
+        "vs_currencies": "usd",
+        "include_24hr_change": "true",
     }
 
+    response = requests.get(
+        url,
+        params=params,
+        timeout=REQUEST_TIMEOUT,
+    )
 
-# ============================================================
-# RESILIENT MARKET DATA
-# ============================================================
+    response.raise_for_status()
+
+    data = response.json()
+
+    bitcoin = data.get("bitcoin", {})
+    ethereum = data.get("ethereum", {})
+    solana = data.get("solana", {})
+
+    btc_price = safe_float(bitcoin.get("usd"))
+
+    if btc_price is None:
+        raise RuntimeError("Bitcoin price was not returned by CoinGecko.")
+
+    market = {
+        "symbol": "BTCUSDT",
+        "price": btc_price,
+        "change_24h": safe_float(bitcoin.get("usd_24h_change"), 0.0),
+        "volume_24h": None,
+
+        "eth_price": safe_float(ethereum.get("usd")),
+        "eth_change_24h": safe_float(
+            ethereum.get("usd_24h_change"),
+            0.0
+        ),
+
+        "sol_price": safe_float(solana.get("usd")),
+        "sol_change_24h": safe_float(
+            solana.get("usd_24h_change"),
+            0.0
+        ),
+
+        "source": "CoinGecko",
+        "updated_at": now_iso(),
+    }
+
+    last_market_provider_request = time.time()
+
+    return market
+
 
 def get_market_data() -> Dict[str, Any]:
+    """
+    Get market data using:
+    1. Fresh cache
+    2. Provider refresh
+    3. Stale cache fallback
+    """
 
-    now = time.time()
+    global market_cache
+    global market_cache_time
 
-    cached = market_cache.get("data")
-
-    cached_at = safe_float(
-        market_cache.get("timestamp"),
-        0.0
-    )
-
-    last_attempt = safe_float(
-        market_cache.get("last_attempt"),
-        0.0
-    )
-
-    cache_age = (
-        now - cached_at
-        if cached
-        else None
-    )
-
-    provider_age = (
-        now - last_attempt
-        if last_attempt > 0
-        else None
-    )
+    current_time = time.time()
 
     # --------------------------------------------------------
-    # 1. Fresh cache
+    # Fresh cache
     # --------------------------------------------------------
+
+    if market_cache is not None:
+        cache_age = current_time - market_cache_time
+
+        if cache_age < MARKET_CACHE_TTL:
+            market = dict(market_cache)
+            market["cache"] = "fresh"
+            market["cache_age_seconds"] = round(cache_age, 2)
+
+            record_local_price(market["price"])
+
+            return market
+
+    # --------------------------------------------------------
+    # Provider cooldown
+    # --------------------------------------------------------
+
+    provider_age = current_time - last_market_provider_request
 
     if (
-        cached
-        and cache_age is not None
-        and cache_age < MARKET_CACHE_TTL
+        market_cache is not None
+        and provider_age < PROVIDER_MIN_INTERVAL
     ):
+        market = dict(market_cache)
 
-        result = dict(cached)
-
-        result["cache"] = "HIT"
-
-        result["cache_age_seconds"] = round(
-            cache_age,
+        market["cache"] = "cooldown"
+        market["cache_age_seconds"] = round(
+            current_time - market_cache_time,
             2
         )
 
-        result["provider_request"] = False
+        record_local_price(market["price"])
 
-        return result
-
-    # --------------------------------------------------------
-    # 2. Provider request cooldown
-    # --------------------------------------------------------
-
-    if (
-        last_attempt > 0
-        and provider_age is not None
-        and provider_age < PROVIDER_MIN_INTERVAL
-    ):
-
-        if cached:
-
-            result = dict(cached)
-
-            result["source"] = (
-                "CoinGecko cached fallback"
-            )
-
-            result["cache"] = (
-                "PROVIDER_COOLDOWN"
-            )
-
-            result["cache_age_seconds"] = round(
-                cache_age,
-                2
-            )
-
-            result["provider_request"] = False
-
-            return result
+        return market
 
     # --------------------------------------------------------
-    # 3. Attempt provider refresh
+    # Provider request
     # --------------------------------------------------------
-
-    market_cache["last_attempt"] = now
 
     try:
+        market = fetch_market_from_provider()
 
-        fresh = fetch_market_data_from_provider()
+        market_cache = dict(market)
+        market_cache_time = current_time
 
-        market_cache["data"] = fresh
-        market_cache["timestamp"] = now
-        market_cache["provider_timestamp"] = now
-        market_cache["last_error"] = None
+        market["cache"] = "provider"
 
-        result = dict(fresh)
+        record_local_price(market["price"])
 
-        result["cache"] = "MISS"
+        return market
 
-        result["cache_age_seconds"] = 0.0
-
-        result["provider_request"] = True
-
-        return result
-
-    except HTTPException as exc:
-
-        market_cache["last_error"] = str(
-            exc.detail
-        )
+    except Exception as exc:
 
         # ----------------------------------------------------
-        # 4. Emergency stale fallback
+        # Stale cache fallback
         # ----------------------------------------------------
 
-        if (
-            cached
-            and cache_age is not None
-            and cache_age <= STALE_MARKET_MAX_AGE
-        ):
+        if market_cache is not None:
+            stale_age = current_time - market_cache_time
 
-            result = dict(cached)
+            if stale_age <= STALE_MARKET_MAX_AGE:
 
-            result["source"] = (
-                "CoinGecko stale cached fallback"
-            )
+                market = dict(market_cache)
 
-            result["cache"] = (
-                "STALE_FALLBACK"
-            )
-
-            result["cache_age_seconds"] = round(
-                cache_age,
-                2
-            )
-
-            result["provider_request"] = True
-
-            result["provider_error"] = str(
-                exc.detail
-            )
-
-            return result
-
-        # ----------------------------------------------------
-        # 5. No usable data
-        # ----------------------------------------------------
-
-        raise
-
-
-# ============================================================
-# BTC HISTORY
-# ============================================================
-
-def get_price_history(
-    days: int = 1,
-    interval: Optional[str] = None
-) -> List[float]:
-
-    cache_key = str(days)
-
-    now = time.time()
-
-    cached = history_cache.get(
-        cache_key
-    )
-
-    # --------------------------------------------------------
-    # Fresh history cache
-    # --------------------------------------------------------
-
-    if cached:
-
-        age = (
-            now
-            - safe_float(
-                cached.get("timestamp"),
-                0.0
-            )
-        )
-
-        if age < HISTORY_CACHE_TTL:
-
-            return list(
-                cached["prices"]
-            )
-
-    # --------------------------------------------------------
-    # Historical provider cooldown
-    # --------------------------------------------------------
-
-    if cached:
-
-        last_attempt = safe_float(
-            cached.get("last_attempt"),
-            0.0
-        )
-
-        if last_attempt > 0:
-
-            elapsed = now - last_attempt
-
-            if elapsed < HISTORY_PROVIDER_MIN_INTERVAL:
-
-                return list(
-                    cached["prices"]
+                market["cache"] = "stale_fallback"
+                market["cache_age_seconds"] = round(
+                    stale_age,
+                    2
+                )
+                market["warning"] = (
+                    "CoinGecko temporarily unavailable. "
+                    "Using cached market data."
                 )
 
-    # --------------------------------------------------------
-    # Prepare cache record
-    # --------------------------------------------------------
+                record_local_price(market["price"])
 
-    if cache_key not in history_cache:
+                return market
 
-        history_cache[cache_key] = {
-            "prices": [],
-            "timestamp": 0.0,
-            "last_attempt": 0.0,
-            "last_error": None,
-        }
+        raise HTTPException(
+            status_code=503,
+            detail=f"Market data provider unavailable: {exc}"
+        )
 
-    history_cache[cache_key][
-        "last_attempt"
-    ] = now
+
+# ============================================================
+# Historical data
+# ============================================================
+
+def get_historical_prices(days: int = 30) -> List[float]:
+    """
+    Historical data is used mainly for backtesting.
+
+    Live signal generation does NOT use this function.
+    """
+
+    global historical_cache
+    global last_history_provider_request
+
+    days = max(1, min(days, 365))
+
+    current_time = time.time()
+
+    cached = historical_cache.get(days)
+
+    if cached:
+        age = current_time - cached["timestamp"]
+
+        if age < HISTORY_CACHE_TTL:
+            return cached["prices"]
+
+    last_request = last_history_provider_request.get(days, 0)
+
+    if current_time - last_request < HISTORY_PROVIDER_MIN_INTERVAL:
+
+        if cached:
+            return cached["prices"]
+
+        raise HTTPException(
+            status_code=503,
+            detail="Historical data provider is temporarily on cooldown."
+        )
+
+    url = f"{COINGECKO_BASE_URL}/coins/bitcoin/market_chart"
 
     params = {
         "vs_currency": "usd",
@@ -581,71 +370,57 @@ def get_price_history(
     }
 
     try:
-
-        data = coingecko_get(
-            f"/coins/{BTC_ID}/market_chart",
-            params
+        response = requests.get(
+            url,
+            params=params,
+            timeout=REQUEST_TIMEOUT,
         )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        prices_raw = data.get("prices", [])
 
         prices = []
 
-        for item in data.get(
-            "prices",
-            []
-        ):
+        for item in prices_raw:
+            if len(item) >= 2:
+                price = safe_float(item[1])
 
-            if (
-                isinstance(item, list)
-                and len(item) >= 2
-            ):
-
-                price = safe_float(
-                    item[1]
-                )
-
-                if price > 0:
+                if price is not None and price > 0:
                     prices.append(price)
 
         if len(prices) < 20:
-
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "Not enough historical BTC "
-                    "data for analysis."
-                )
+            raise RuntimeError(
+                "Not enough historical Bitcoin prices returned."
             )
 
-        history_cache[cache_key] = {
+        historical_cache[days] = {
+            "timestamp": current_time,
             "prices": prices,
-            "timestamp": now,
-            "last_attempt": now,
-            "last_error": None,
         }
+
+        last_history_provider_request[days] = current_time
 
         return prices
 
-    except HTTPException as exc:
+    except Exception as exc:
 
-        history_cache[cache_key][
-            "last_error"
-        ] = str(exc.detail)
+        if cached:
+            return cached["prices"]
 
-        # Use existing historical cache if available.
-        if cached and cached.get("prices"):
-
-            return list(
-                cached["prices"]
-            )
-
-        raise
+        raise HTTPException(
+            status_code=503,
+            detail=f"Historical data unavailable: {exc}"
+        )
 
 
 # ============================================================
-# MOVING AVERAGE
+# Technical indicators
 # ============================================================
 
-def moving_average(
+def calculate_sma(
     prices: List[float],
     period: int
 ) -> Optional[float]:
@@ -653,14 +428,10 @@ def moving_average(
     if len(prices) < period:
         return None
 
-    return statistics.mean(
-        prices[-period:]
-    )
+    values = prices[-period:]
 
+    return statistics.mean(values)
 
-# ============================================================
-# RSI
-# ============================================================
 
 def calculate_rsi(
     prices: List[float],
@@ -670,85 +441,134 @@ def calculate_rsi(
     if len(prices) <= period:
         return None
 
-    gains = []
-    losses = []
+    changes = []
 
     for i in range(1, len(prices)):
-
-        change = (
-            prices[i]
-            - prices[i - 1]
+        changes.append(
+            prices[i] - prices[i - 1]
         )
 
-        if change >= 0:
+    recent_changes = changes[-period:]
 
-            gains.append(change)
-            losses.append(0.0)
+    gains = [
+        change
+        for change in recent_changes
+        if change > 0
+    ]
 
-        else:
+    losses = [
+        abs(change)
+        for change in recent_changes
+        if change < 0
+    ]
 
-            gains.append(0.0)
-            losses.append(
-                abs(change)
-            )
-
-    average_gain = statistics.mean(
-        gains[-period:]
+    average_gain = (
+        sum(gains) / period
+        if gains
+        else 0.0
     )
 
-    average_loss = statistics.mean(
-        losses[-period:]
+    average_loss = (
+        sum(losses) / period
+        if losses
+        else 0.0
     )
 
     if average_loss == 0:
 
-        return (
-            100.0
-            if average_gain > 0
-            else 50.0
-        )
+        if average_gain == 0:
+            return 50.0
 
-    rs = (
-        average_gain
-        / average_loss
+        return 100.0
+
+    relative_strength = (
+        average_gain / average_loss
     )
 
-    return round(
-        clamp(
-            100 - (
-                100 / (1 + rs)
-            ),
-            0,
-            100
-        ),
-        2
+    rsi = 100 - (
+        100 / (1 + relative_strength)
     )
+
+    return round(clamp(rsi, 0, 100), 2)
 
 
 # ============================================================
-# SIGNAL ENGINE
+# Signal engine
 # ============================================================
 
 def generate_signal() -> Dict[str, Any]:
 
-    prices = get_price_history(
-        days=1
-    )
+    market = get_market_data()
 
-    current_price = prices[-1]
+    price = market["price"]
+
+    # The important change in v1.3.0:
+    # use locally collected prices rather than repeatedly
+    # requesting CoinGecko market_chart.
+
+    local_prices = [
+        item["price"]
+        for item in local_price_history
+    ]
+
+    history_count = len(local_prices)
+
+    # --------------------------------------------------------
+    # Warming-up state
+    # --------------------------------------------------------
+
+    if history_count < 20:
+
+        change_24h = safe_float(
+            market.get("change_24h"),
+            0.0
+        )
+
+        if change_24h > 2:
+            trend = "BULLISH"
+
+        elif change_24h < -2:
+            trend = "BEARISH"
+
+        else:
+            trend = "NEUTRAL"
+
+        return {
+            "action": "HOLD",
+            "description": (
+                "UpUpway AI is collecting local BTC price "
+                "history before generating a full technical signal."
+            ),
+            "confidence": 50.0,
+            "trend": trend,
+            "rsi": None,
+            "price": price,
+            "short_ma": None,
+            "long_ma": None,
+            "source": "UpUpway AI v1.3.0 local signal engine",
+            "analysis_status": "WARMING_UP",
+            "history_points": history_count,
+            "required_history_points": 20,
+            "paper_only": True,
+            "generated_at": now_iso(),
+        }
+
+    # --------------------------------------------------------
+    # Indicators
+    # --------------------------------------------------------
 
     rsi = calculate_rsi(
-        prices,
+        local_prices,
         14
     )
 
-    short_ma = moving_average(
-        prices,
+    short_ma = calculate_sma(
+        local_prices,
         5
     )
 
-    long_ma = moving_average(
-        prices,
+    long_ma = calculate_sma(
+        local_prices,
         14
     )
 
@@ -758,1092 +578,590 @@ def generate_signal() -> Dict[str, Any]:
         or long_ma is None
     ):
 
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Not enough data to generate "
-                "a trading signal."
-            )
-        )
+        return {
+            "action": "HOLD",
+            "description": "Insufficient local history for full analysis.",
+            "confidence": 50.0,
+            "trend": "NEUTRAL",
+            "rsi": rsi,
+            "price": price,
+            "short_ma": short_ma,
+            "long_ma": long_ma,
+            "source": "UpUpway AI v1.3.0 local signal engine",
+            "analysis_status": "WARMING_UP",
+            "history_points": history_count,
+            "paper_only": True,
+            "generated_at": now_iso(),
+        }
 
-    score = 50.0
+    # --------------------------------------------------------
+    # Score
+    # --------------------------------------------------------
+
+    score = 50
 
     reasons = []
 
-    # --------------------------------------------------------
     # RSI
-    # --------------------------------------------------------
-
     if rsi < 30:
-
         score += 20
-
-        reasons.append(
-            "RSI indicates oversold conditions."
-        )
+        reasons.append("RSI indicates oversold conditions.")
 
     elif rsi < 40:
-
         score += 10
-
-        reasons.append(
-            "RSI shows relatively weak momentum."
-        )
+        reasons.append("RSI is moderately low.")
 
     elif rsi > 70:
-
         score -= 20
-
-        reasons.append(
-            "RSI indicates overbought conditions."
-        )
+        reasons.append("RSI indicates overbought conditions.")
 
     elif rsi > 60:
-
         score -= 10
-
-        reasons.append(
-            "RSI shows strong but potentially "
-            "extended momentum."
-        )
+        reasons.append("RSI is moderately high.")
 
     else:
+        reasons.append("RSI is in a neutral range.")
 
-        reasons.append(
-            "RSI is in a neutral range."
-        )
-
-    # --------------------------------------------------------
     # Moving averages
-    # --------------------------------------------------------
-
     if short_ma > long_ma:
-
         score += 20
-
         reasons.append(
             "Short-term moving average is above "
-            "long-term average."
+            "long-term moving average."
         )
 
-    elif short_ma < long_ma:
-
+    else:
         score -= 20
-
         reasons.append(
             "Short-term moving average is below "
-            "long-term average."
+            "long-term moving average."
         )
 
-    else:
-
-        reasons.append(
-            "Moving averages are approximately equal."
-        )
-
-    # --------------------------------------------------------
     # Price vs long MA
-    # --------------------------------------------------------
-
-    if current_price > long_ma:
-
+    if price > long_ma:
         score += 10
-
         reasons.append(
-            "Price is above the long-term "
-            "moving average."
+            "Price is above the long-term moving average."
         )
 
     else:
-
         score -= 10
-
         reasons.append(
-            "Price is below the long-term "
-            "moving average."
+            "Price is below the long-term moving average."
         )
 
-    score = clamp(
-        score,
-        0,
-        100
-    )
+    score = clamp(score, 0, 100)
+
+    # --------------------------------------------------------
+    # Action
+    # --------------------------------------------------------
 
     if score >= 65:
-
         action = "BUY"
 
     elif score <= 35:
-
         action = "SELL"
 
     else:
-
         action = "HOLD"
+
+    # --------------------------------------------------------
+    # Trend
+    # --------------------------------------------------------
 
     if (
         short_ma > long_ma
-        and current_price > long_ma
+        and price > long_ma
     ):
-
         trend = "BULLISH"
 
     elif (
         short_ma < long_ma
-        and current_price < long_ma
+        and price < long_ma
     ):
-
         trend = "BEARISH"
 
     else:
-
         trend = "NEUTRAL"
 
     return {
         "action": action,
-
-        "description": " ".join(
-            reasons
-        ),
-
-        "confidence": round(
-            score,
-            2
-        ),
-
+        "description": " ".join(reasons),
+        "confidence": round(score, 2),
         "trend": trend,
-
-        "rsi": round(
-            rsi,
-            2
-        ),
-
-        "price": round(
-            current_price,
-            2
-        ),
-
-        "short_ma": round(
-            short_ma,
-            2
-        ),
-
-        "long_ma": round(
-            long_ma,
-            2
-        ),
-
-        "source": (
-            "UpUpway AI rule-based "
-            "signal engine"
-        ),
-
+        "rsi": rsi,
+        "price": price,
+        "short_ma": round(short_ma, 2),
+        "long_ma": round(long_ma, 2),
+        "source": "UpUpway AI v1.3.0 local signal engine",
+        "analysis_status": "READY",
+        "history_points": history_count,
         "paper_only": True,
-
-        "generated_at": utc_iso(),
+        "generated_at": now_iso(),
     }
 
 
 # ============================================================
-# DAILY RISK
-# ============================================================
-
-def ensure_daily_baseline(
-    current_value: float
-) -> None:
-
-    today = (
-        utc_now()
-        .date()
-        .isoformat()
-    )
-
-    if (
-        paper_account[
-            "daily_start_date"
-        ]
-        != today
-    ):
-
-        paper_account[
-            "daily_start_date"
-        ] = today
-
-        paper_account[
-            "daily_start_value"
-        ] = current_value
-
-
-def daily_loss_percent(
-    current_value: float
-) -> float:
-
-    ensure_daily_baseline(
-        current_value
-    )
-
-    baseline = paper_account[
-        "daily_start_value"
-    ]
-
-    if baseline <= 0:
-        return 0.0
-
-    loss = (
-        (
-            baseline
-            - current_value
-        )
-        / baseline
-    ) * 100
-
-    return round(
-        max(
-            0.0,
-            loss
-        ),
-        2
-    )
-
-
-def max_daily_loss_reached(
-    current_value: float
-) -> bool:
-
-    return (
-        daily_loss_percent(
-            current_value
-        )
-        >= RISK_SETTINGS[
-            "max_daily_loss_percent"
-        ]
-    )
-
-
-def max_consecutive_losses_reached() -> bool:
-
-    return (
-        auto_trading[
-            "consecutive_losses"
-        ]
-        >= RISK_SETTINGS[
-            "max_consecutive_losses"
-        ]
-    )
-
-
-# ============================================================
-# ACCOUNT VALUE
+# Paper portfolio calculations
 # ============================================================
 
 def calculate_account_value(
+    current_price: Optional[float] = None
+) -> float:
+
+    if current_price is None:
+
+        market = get_market_data()
+
+        current_price = market["price"]
+
+    portfolio_value = (
+        paper_account["cash"]
+        + (
+            paper_account["btc"]
+            * current_price
+        )
+    )
+
+    return round(portfolio_value, 2)
+
+
+def update_account_metrics(
     current_price: Optional[float] = None
 ):
 
     if current_price is None:
 
-        try:
+        market = get_market_data()
 
-            current_price = get_market_data()[
-                "price"
-            ]
+        current_price = market["price"]
 
-        except Exception:
-
-            current_price = 0.0
+    portfolio_value = calculate_account_value(
+        current_price
+    )
 
     btc_value = (
         paper_account["btc"]
         * current_price
     )
 
-    portfolio_value = (
-        paper_account["cash"]
-        + btc_value
-    )
-
-    unrealized = 0.0
+    entry_price = paper_account["entry_price"]
 
     if (
-        paper_account["btc"] > 0
-        and paper_account["entry_price"]
-        is not None
+        entry_price is not None
+        and paper_account["btc"] > 0
     ):
 
         unrealized = (
-            current_price
-            - paper_account["entry_price"]
+            current_price - entry_price
         ) * paper_account["btc"]
 
-    realized = paper_account[
-        "realized_profit_loss"
-    ]
+    else:
+        unrealized = 0.0
 
-    total_profit_loss = (
-        realized
-        + unrealized
-    )
-
-    paper_account[
-        "unrealized_profit_loss"
-    ] = round(
+    paper_account["unrealized_profit_loss"] = round(
         unrealized,
         2
     )
 
-    paper_account[
-        "profit_loss"
-    ] = round(
-        total_profit_loss,
-        2
-    )
-
-    paper_account[
-        "portfolio_value"
-    ] = round(
-        portfolio_value,
-        2
-    )
-
-    ensure_daily_baseline(
+    paper_account["profit_loss"] = round(
         portfolio_value
+        - paper_account["starting_balance"],
+        2
     )
+
+    paper_account["portfolio_value"] = portfolio_value
 
     return {
-        "starting_balance": round(
-            paper_account[
-                "starting_balance"
-            ],
+        **paper_account,
+        "btc_price": current_price,
+        "btc_value": round(btc_value, 2),
+        "roi_percent": round(
+            (
+                (
+                    portfolio_value
+                    / paper_account["starting_balance"]
+                ) - 1
+            ) * 100,
             2
         ),
-
-        "cash": round(
-            paper_account["cash"],
-            2
-        ),
-
-        "btc": round(
-            paper_account["btc"],
-            8
-        ),
-
-        "btc_price": round(
-            current_price,
-            2
-        ),
-
-        "btc_value": round(
-            btc_value,
-            2
-        ),
-
-        "entry_price": (
-            round(
-                paper_account[
-                    "entry_price"
-                ],
-                2
-            )
-            if paper_account[
-                "entry_price"
-            ] is not None
-            else None
-        ),
-
-        "profit_loss": round(
-            total_profit_loss,
-            2
-        ),
-
-        "realized_profit_loss": round(
-            realized,
-            2
-        ),
-
-        "unrealized_profit_loss": round(
-            unrealized,
-            2
-        ),
-
-        "portfolio_value": round(
-            portfolio_value,
-            2
-        ),
-
-        "daily_loss_percent":
-            daily_loss_percent(
-                portfolio_value
-            ),
-
-        "last_action":
-            paper_account[
-                "last_action"
-            ],
-
-        "paper_mode": True,
     }
 
 
 # ============================================================
-# POSITION SIZE
+# Trade recording
 # ============================================================
 
-def calculate_buy_amount() -> float:
-
-    percent = RISK_SETTINGS[
-        "max_position_percent"
-    ]
-
-    return max(
-        0.0,
-        paper_account["cash"]
-        * percent
-        / 100
-    )
-
-
-# ============================================================
-# COOLDOWN
-# ============================================================
-
-def cooldown_active() -> bool:
-
-    last_trade = auto_trading[
-        "last_trade_time"
-    ]
-
-    if not last_trade:
-        return False
-
-    try:
-
-        previous = datetime.fromisoformat(
-            last_trade
-        )
-
-        elapsed = (
-            utc_now()
-            - previous
-        ).total_seconds()
-
-        return (
-            elapsed
-            < RISK_SETTINGS[
-                "trade_cooldown_seconds"
-            ]
-        )
-
-    except (
-        ValueError,
-        TypeError
-    ):
-
-        return False
-
-
-def cooldown_remaining() -> float:
-
-    last_trade = auto_trading[
-        "last_trade_time"
-    ]
-
-    if not last_trade:
-        return 0.0
-
-    try:
-
-        previous = datetime.fromisoformat(
-            last_trade
-        )
-
-        elapsed = (
-            utc_now()
-            - previous
-        ).total_seconds()
-
-        return max(
-            0.0,
-            round(
-                RISK_SETTINGS[
-                    "trade_cooldown_seconds"
-                ]
-                - elapsed,
-                2
-            )
-        )
-
-    except (
-        ValueError,
-        TypeError
-    ):
-
-        return 0.0
-
-
-# ============================================================
-# TRADE RECORDING
-# ============================================================
-
-def record_trade(
-    action: str,
+def add_trade(
+    side: str,
     price: float,
     quantity: float,
-    confidence: Optional[float],
+    amount: float,
     reason: str,
-    pnl: Optional[float] = None,
-    status: str = "OPEN",
-) -> Dict[str, Any]:
+    profit_loss: float = 0.0,
+    source: str = "manual"
+):
 
     trade = {
-
-        "id": len(
-            trade_history
-        ) + 1,
-
-        "timestamp": utc_iso(),
-
-        "action": action,
-
+        "id": str(uuid.uuid4()),
+        "timestamp": now_iso(),
+        "side": side,
         "symbol": "BTCUSDT",
-
-        "price": round(
-            price,
-            2
-        ),
-
-        "quantity": round(
-            quantity,
-            8
-        ),
-
-        "confidence": (
-            round(
-                confidence,
-                2
-            )
-            if confidence is not None
-            else None
-        ),
-
+        "price": round(price, 2),
+        "quantity": round(quantity, 8),
+        "amount": round(amount, 2),
         "reason": reason,
-
-        "pnl": (
-            round(
-                pnl,
-                2
-            )
-            if pnl is not None
-            else None
-        ),
-
-        "status": status,
-
-        "paper_trade": True,
+        "profit_loss": round(profit_loss, 2),
+        "source": source,
+        "paper_only": True,
     }
 
-    trade_history.append(
-        trade
-    )
+    trade_history.append(trade)
 
     return trade
 
 
 # ============================================================
-# PAPER BUY
+# Paper BUY
 # ============================================================
 
 def execute_paper_buy(
-    confidence: Optional[float] = None,
-    reason: str = "Manual paper trade"
-) -> Dict[str, Any]:
-
-    if paper_account["btc"] > 0:
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "BUY blocked: a BTC paper "
-                "position is already open."
-            )
-        )
-
-    account = calculate_account_value()
-
-    if max_daily_loss_reached(
-        account["portfolio_value"]
-    ):
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "BUY blocked: maximum daily "
-                "loss limit has been reached."
-            )
-        )
+    source: str = "manual",
+    reason: str = "Manual paper buy"
+):
 
     market = get_market_data()
 
     price = market["price"]
 
-    cash_to_use = calculate_buy_amount()
+    if price <= 0:
+        raise HTTPException(
+            status_code=503,
+            detail="Invalid BTC price."
+        )
 
-    if cash_to_use <= 0:
-
+    if paper_account["btc"] > 0:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "BUY blocked: insufficient "
-                "paper cash."
-            )
+            detail="Paper account already holds BTC."
+        )
+
+    max_position_value = (
+        paper_account["cash"]
+        * RISK_SETTINGS["max_position_percent"]
+        / 100
+    )
+
+    if max_position_value <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Insufficient paper cash."
         )
 
     quantity = (
-        cash_to_use
+        max_position_value
         / price
     )
 
-    paper_account["cash"] -= (
-        cash_to_use
-    )
+    amount = quantity * price
 
-    paper_account["btc"] = (
-        quantity
-    )
+    paper_account["cash"] -= amount
+    paper_account["btc"] += quantity
+    paper_account["entry_price"] = price
+    paper_account["last_action"] = "BUY"
 
-    paper_account[
-        "entry_price"
-    ] = price
-
-    paper_account[
-        "last_action"
-    ] = "BUY"
-
-    trade = record_trade(
-        action="BUY",
+    trade = add_trade(
+        side="BUY",
         price=price,
         quantity=quantity,
-        confidence=confidence,
+        amount=amount,
         reason=reason,
-        status="OPEN",
+        source=source,
     )
+
+    update_account_metrics(price)
 
     return {
         "success": True,
-
-        "message": (
-            "Paper BUY executed successfully."
-        ),
-
+        "message": "Paper BUY executed.",
         "trade": trade,
-
-        "account":
-            calculate_account_value(
-                price
-            ),
-
-        "risk":
-            get_risk_snapshot(
-                price
-            ),
+        "account": update_account_metrics(price),
+        "paper_only": True,
     }
 
 
 # ============================================================
-# PAPER SELL
+# Paper SELL
 # ============================================================
 
 def execute_paper_sell(
-    confidence: Optional[float] = None,
-    reason: str = "Manual paper trade"
-) -> Dict[str, Any]:
-
-    if paper_account["btc"] <= 0:
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "SELL blocked: no BTC paper "
-                "position is open."
-            )
-        )
+    source: str = "manual",
+    reason: str = "Manual paper sell"
+):
 
     market = get_market_data()
 
     price = market["price"]
 
-    quantity = paper_account[
-        "btc"
+    if paper_account["btc"] <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No BTC position to sell."
+        )
+
+    quantity = paper_account["btc"]
+
+    amount = quantity * price
+
+    entry_price = paper_account["entry_price"]
+
+    profit_loss = 0.0
+
+    if entry_price is not None:
+        profit_loss = (
+            price - entry_price
+        ) * quantity
+
+    paper_account["cash"] += amount
+    paper_account["btc"] = 0.0
+    paper_account["entry_price"] = None
+    paper_account["last_action"] = "SELL"
+
+    paper_account["realized_profit_loss"] += profit_loss
+
+    trade = add_trade(
+        side="SELL",
+        price=price,
+        quantity=quantity,
+        amount=amount,
+        reason=reason,
+        profit_loss=profit_loss,
+        source=source,
+    )
+
+    # Track wins/losses
+    if profit_loss > 0:
+        auto_trading["wins"] += 1
+
+    elif profit_loss < 0:
+        auto_trading["losses"] += 1
+
+    update_account_metrics(price)
+
+    return {
+        "success": True,
+        "message": "Paper SELL executed.",
+        "trade": trade,
+        "account": update_account_metrics(price),
+        "paper_only": True,
+    }
+
+
+# ============================================================
+# Risk engine
+# ============================================================
+
+def get_consecutive_losses() -> int:
+
+    consecutive = 0
+
+    for trade in reversed(trade_history):
+
+        if trade["side"] != "SELL":
+            continue
+
+        pnl = safe_float(
+            trade.get("profit_loss"),
+            0
+        )
+
+        if pnl < 0:
+            consecutive += 1
+
+        else:
+            break
+
+    return consecutive
+
+
+def get_risk_snapshot(
+    current_price: Optional[float] = None
+):
+
+    account = update_account_metrics(
+        current_price
+    )
+
+    starting_balance = paper_account[
+        "starting_balance"
     ]
+
+    current_value = account[
+        "portfolio_value"
+    ]
+
+    loss_percent = 0.0
+
+    if current_value < starting_balance:
+
+        loss_percent = (
+            (
+                starting_balance
+                - current_value
+            )
+            / starting_balance
+        ) * 100
+
+    consecutive_losses = get_consecutive_losses()
+
+    daily_loss_limit_hit = (
+        loss_percent
+        >= RISK_SETTINGS["daily_loss_limit_percent"]
+    )
+
+    consecutive_loss_limit_hit = (
+        consecutive_losses
+        >= RISK_SETTINGS["max_consecutive_losses"]
+    )
+
+    return {
+        "portfolio_value": current_value,
+        "profit_loss": account["profit_loss"],
+        "loss_percent": round(loss_percent, 2),
+        "consecutive_losses": consecutive_losses,
+        "daily_loss_limit_hit": daily_loss_limit_hit,
+        "consecutive_loss_limit_hit": consecutive_loss_limit_hit,
+        "risk_settings": RISK_SETTINGS,
+    }
+
+
+# ============================================================
+# Auto-trading exit management
+# ============================================================
+
+def check_position_exit(
+    current_price: float
+):
+
+    if paper_account["btc"] <= 0:
+        return None
 
     entry_price = paper_account[
         "entry_price"
     ]
 
     if entry_price is None:
-
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Paper position has no "
-                "entry price."
-            )
-        )
-
-    sale_value = (
-        quantity
-        * price
-    )
-
-    pnl = (
-        price
-        - entry_price
-    ) * quantity
-
-    paper_account["cash"] += (
-        sale_value
-    )
-
-    paper_account["btc"] = 0.0
-
-    paper_account[
-        "entry_price"
-    ] = None
-
-    paper_account[
-        "last_action"
-    ] = "SELL"
-
-    paper_account[
-        "realized_profit_loss"
-    ] += pnl
-
-    trade = record_trade(
-        action="SELL",
-        price=price,
-        quantity=quantity,
-        confidence=confidence,
-        reason=reason,
-        pnl=pnl,
-        status="CLOSED",
-    )
-
-    if pnl > 0:
-
-        auto_trading[
-            "wins"
-        ] += 1
-
-        auto_trading[
-            "consecutive_losses"
-        ] = 0
-
-    elif pnl < 0:
-
-        auto_trading[
-            "losses"
-        ] += 1
-
-        auto_trading[
-            "consecutive_losses"
-        ] += 1
-
-    return {
-        "success": True,
-
-        "message": (
-            "Paper SELL executed successfully."
-        ),
-
-        "trade": trade,
-
-        "account":
-            calculate_account_value(
-                price
-            ),
-
-        "risk":
-            get_risk_snapshot(
-                price
-            ),
-    }
-
-
-# ============================================================
-# STOP LOSS / TAKE PROFIT
-# ============================================================
-
-def position_exit_reason(
-    price: float
-) -> Optional[str]:
-
-    entry = paper_account[
-        "entry_price"
-    ]
-
-    if (
-        paper_account["btc"] <= 0
-        or entry is None
-    ):
-
         return None
 
-    change_percent = (
-        (
-            price
-            - entry
+    stop_loss_price = (
+        entry_price
+        * (
+            1
+            - RISK_SETTINGS["stop_loss_percent"]
+            / 100
         )
-        / entry
-    ) * 100
+    )
 
-    if (
-        change_percent
-        <= -RISK_SETTINGS[
-            "stop_loss_percent"
-        ]
-    ):
+    take_profit_price = (
+        entry_price
+        * (
+            1
+            + RISK_SETTINGS["take_profit_percent"]
+            / 100
+        )
+    )
 
-        return (
-            "Stop-loss triggered at "
-            f"{change_percent:.2f}%."
+    if current_price <= stop_loss_price:
+
+        return execute_paper_sell(
+            source="risk_engine",
+            reason="Stop-loss triggered"
         )
 
-    if (
-        change_percent
-        >= RISK_SETTINGS[
-            "take_profit_percent"
-        ]
-    ):
+    if current_price >= take_profit_price:
 
-        return (
-            "Take-profit triggered at "
-            f"{change_percent:.2f}%."
+        return execute_paper_sell(
+            source="risk_engine",
+            reason="Take-profit triggered"
         )
 
     return None
 
 
 # ============================================================
-# RISK SNAPSHOT
+# API Models
 # ============================================================
 
-def get_risk_snapshot(
-    current_price: Optional[float] = None
-) -> Dict[str, Any]:
-
-    account = calculate_account_value(
-        current_price
-    )
-
-    entry = paper_account[
-        "entry_price"
-    ]
-
-    position_change = None
-
-    if (
-        entry is not None
-        and account["btc"] > 0
-    ):
-
-        position_change = round(
-            (
-                (
-                    account["btc_price"]
-                    - entry
-                )
-                / entry
-            ) * 100,
-            2
-        )
-
-    return {
-
-        "max_position_percent":
-            RISK_SETTINGS[
-                "max_position_percent"
-            ],
-
-        "minimum_confidence":
-            RISK_SETTINGS[
-                "minimum_confidence"
-            ],
-
-        "trade_cooldown_seconds":
-            RISK_SETTINGS[
-                "trade_cooldown_seconds"
-            ],
-
-        "stop_loss_percent":
-            RISK_SETTINGS[
-                "stop_loss_percent"
-            ],
-
-        "take_profit_percent":
-            RISK_SETTINGS[
-                "take_profit_percent"
-            ],
-
-        "max_daily_loss_percent":
-            RISK_SETTINGS[
-                "max_daily_loss_percent"
-            ],
-
-        "max_consecutive_losses":
-            RISK_SETTINGS[
-                "max_consecutive_losses"
-            ],
-
-        "daily_loss_percent":
-            account[
-                "daily_loss_percent"
-            ],
-
-        "daily_loss_limit_reached":
-            max_daily_loss_reached(
-                account[
-                    "portfolio_value"
-                ]
-            ),
-
-        "consecutive_losses":
-            auto_trading[
-                "consecutive_losses"
-            ],
-
-        "consecutive_loss_limit_reached":
-            max_consecutive_losses_reached(),
-
-        "position_open":
-            paper_account["btc"] > 0,
-
-        "position_change_percent":
-            position_change,
-
-        "paper_only": True,
-    }
+class AutoTradingToggle(BaseModel):
+    enabled: bool
 
 
 # ============================================================
-# ROOT
+# Root
 # ============================================================
 
 @app.get("/")
 def root():
 
     return {
-
         "name": APP_NAME,
-
-        "version": VERSION,
-
         "status": "online",
-
         "mode": "paper",
-
-        "description": (
-            "AI crypto market analysis "
-            "and paper trading backend."
+        "version": VERSION,
+        "build_id": BUILD_ID,
+        "message": (
+            "Upupway AI trading backend is running."
         ),
-
-        "paper_trading_only": True,
-
         "real_money_trading": False,
-
-        "timestamp": utc_iso(),
+        "paper_trading": True,
     }
 
 
 # ============================================================
-# HEALTH
+# Health
 # ============================================================
 
 @app.get("/api/health")
 def health():
 
     return {
-
         "status": "healthy",
-
         "service": APP_NAME,
-
         "version": VERSION,
-
+        "build_id": BUILD_ID,
         "mode": "paper",
-
-        "timestamp": utc_iso(),
+        "timestamp": now_iso(),
     }
 
 
 # ============================================================
-# SYSTEM STATUS
+# Status
 # ============================================================
 
 @app.get("/api/status")
-def system_status():
-
-    cached = market_cache.get(
-        "data"
-    )
-
-    cached_at = safe_float(
-        market_cache.get(
-            "timestamp"
-        ),
-        0.0
-    )
-
-    cache_age = (
-        round(
-            time.time()
-            - cached_at,
-            2
-        )
-        if cached
-        else None
-    )
+def status():
 
     return {
-
         "name": APP_NAME,
-
         "version": VERSION,
-
+        "build_id": BUILD_ID,
         "status": "online",
-
         "mode": "paper",
-
-        "market_data":
-            "CoinGecko + resilient cache",
-
-        "market_cache":
-            "active",
-
-        "market_cache_ttl":
-            MARKET_CACHE_TTL,
-
-        "market_cache_age":
-            cache_age,
-
-        "signal_engine":
-            "RSI + Moving Average",
-
-        "auto_trading":
-            auto_trading[
-                "enabled"
-            ],
-
+        "market_data": "CoinGecko",
+        "signal_engine": "RSI + Moving Average + Local Price History",
+        "auto_trading": auto_trading["enabled"],
         "paper_trading": True,
-
         "real_money_trading": False,
-
         "api_keys_required": False,
-
-        "timestamp": utc_iso(),
+        "local_history_points": len(
+            local_price_history
+        ),
+        "timestamp": now_iso(),
     }
 
 
 # ============================================================
-# MARKET
+# Market
 # ============================================================
 
 @app.get("/api/market")
@@ -1853,7 +1171,7 @@ def market():
 
 
 # ============================================================
-# SIGNAL
+# Signal
 # ============================================================
 
 @app.get("/api/signal")
@@ -1863,436 +1181,318 @@ def signal():
 
 
 # ============================================================
-# PAPER ACCOUNT
+# Local history status
 # ============================================================
 
-@app.get("/api/paper-account")
-def get_paper_account():
+@app.get("/api/history-status")
+def history_status():
 
-    return calculate_account_value()
-
-
-# ============================================================
-# PAPER BUY
-# ============================================================
-
-@app.post("/api/paper-buy")
-def paper_buy(
-    request: PaperBuyRequest
-):
-
-    return execute_paper_buy(
-        confidence=request.confidence,
-        reason=(
-            request.reason
-            or "Manual paper trade"
-        )
-    )
-
-
-# ============================================================
-# PAPER SELL
-# ============================================================
-
-@app.post("/api/paper-sell")
-def paper_sell(
-    request: PaperSellRequest
-):
-
-    return execute_paper_sell(
-        confidence=request.confidence,
-        reason=(
-            request.reason
-            or "Manual paper trade"
-        )
-    )
-
-
-# ============================================================
-# AUTO TRADING STATUS
-# ============================================================
-
-@app.get("/api/auto-trading")
-def get_auto_trading():
-
-    account = calculate_account_value()
+    points = len(local_price_history)
 
     return {
-
-        "enabled":
-            auto_trading[
-                "enabled"
-            ],
-
-        "last_signal":
-            auto_trading[
-                "last_signal"
-            ],
-
-        "last_action":
-            auto_trading[
-                "last_action"
-            ],
-
-        "last_price":
-            auto_trading[
-                "last_price"
-            ],
-
-        "last_trade_time":
-            auto_trading[
-                "last_trade_time"
-            ],
-
-        "trades":
-            auto_trading[
-                "trades"
-            ],
-
-        "wins":
-            auto_trading[
-                "wins"
-            ],
-
-        "losses":
-            auto_trading[
-                "losses"
-            ],
-
-        "consecutive_losses":
-            auto_trading[
-                "consecutive_losses"
-            ],
-
-        "risk_settings":
-            RISK_SETTINGS,
-
-        "cooldown_active":
-            cooldown_active(),
-
-        "cooldown_remaining":
-            cooldown_remaining(),
-
-        "position_open":
-            paper_account[
-                "btc"
-            ] > 0,
-
-        "paper_account":
-            account,
-
-        "risk":
-            get_risk_snapshot(
-                account[
-                    "btc_price"
-                ]
-            ),
-
+        "success": True,
+        "history_points": points,
+        "required_points": 20,
+        "ready": points >= 20,
+        "max_points": 500,
+        "source": "local_market_snapshots",
+        "note": (
+            "Live signal generation uses local snapshots "
+            "instead of repeatedly requesting CoinGecko "
+            "historical market data."
+        ),
         "paper_only": True,
     }
 
 
 # ============================================================
-# AUTO TRADING TOGGLE
+# Paper account
+# ============================================================
+
+@app.get("/api/paper-account")
+def paper_account_endpoint():
+
+    return update_account_metrics()
+
+
+# ============================================================
+# Paper BUY
+# ============================================================
+
+@app.post("/api/paper-buy")
+def paper_buy():
+
+    return execute_paper_buy()
+
+
+# ============================================================
+# Paper SELL
+# ============================================================
+
+@app.post("/api/paper-sell")
+def paper_sell():
+
+    return execute_paper_sell()
+
+
+# ============================================================
+# Trade history
+# ============================================================
+
+@app.get("/api/trades")
+def trades():
+
+    return {
+        "success": True,
+        "count": len(trade_history),
+        "trades": trade_history,
+        "paper_only": True,
+    }
+
+
+# ============================================================
+# Risk settings
+# ============================================================
+
+@app.get("/api/risk-settings")
+def risk_settings():
+
+    return {
+        "success": True,
+        "risk_settings": RISK_SETTINGS,
+        "paper_only": True,
+    }
+
+
+# ============================================================
+# Risk snapshot
+# ============================================================
+
+@app.get("/api/risk")
+def risk():
+
+    return {
+        "success": True,
+        "risk": get_risk_snapshot(),
+        "paper_only": True,
+    }
+
+
+# ============================================================
+# Auto trading status
+# ============================================================
+
+@app.get("/api/auto-trading")
+def auto_trading_status():
+
+    market = get_market_data()
+
+    current_price = market["price"]
+
+    risk = get_risk_snapshot(
+        current_price
+    )
+
+    cooldown_active = False
+
+    if auto_trading["last_trade_time"]:
+
+        elapsed = (
+            time.time()
+            - auto_trading["last_trade_time"]
+        )
+
+        cooldown_active = (
+            elapsed
+            < RISK_SETTINGS[
+                "trade_cooldown_seconds"
+            ]
+        )
+
+    return {
+        "enabled": auto_trading["enabled"],
+        "last_signal": auto_trading["last_signal"],
+        "last_action": auto_trading["last_action"],
+        "last_price": auto_trading["last_price"],
+        "last_trade_time": (
+            datetime.fromtimestamp(
+                auto_trading["last_trade_time"],
+                timezone.utc
+            ).isoformat()
+            if auto_trading["last_trade_time"]
+            else None
+        ),
+        "trades": auto_trading["trades"],
+        "wins": auto_trading["wins"],
+        "losses": auto_trading["losses"],
+        "cooldown_active": cooldown_active,
+        "risk": risk,
+        "paper_only": True,
+    }
+
+
+# ============================================================
+# Toggle auto trading
 # ============================================================
 
 @app.post("/api/auto-trading/toggle")
 def toggle_auto_trading(
-    request: AutoTradingToggleRequest
+    payload: AutoTradingToggle
 ):
 
-    if request.enabled:
-
-        account = calculate_account_value()
-
-        if max_daily_loss_reached(
-            account[
-                "portfolio_value"
-            ]
-        ):
-
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Auto trading cannot "
-                    "be enabled because "
-                    "the maximum daily loss "
-                    "limit has been reached."
-                )
-            )
-
-        if max_consecutive_losses_reached():
-
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Auto trading cannot "
-                    "be enabled because "
-                    "the maximum consecutive-"
-                    "loss limit has been reached."
-                )
-            )
-
-    auto_trading[
-        "enabled"
-    ] = request.enabled
+    auto_trading["enabled"] = payload.enabled
 
     return {
-
         "success": True,
-
-        "enabled":
-            auto_trading[
-                "enabled"
-            ],
-
+        "enabled": auto_trading["enabled"],
         "message": (
-            "Auto trading enabled."
-            if request.enabled
-            else "Auto trading disabled."
+            "Paper auto-trading enabled."
+            if payload.enabled
+            else "Paper auto-trading disabled."
         ),
-
-        "mode": "paper",
-
         "paper_only": True,
+        "real_money_trading": False,
     }
 
 
 # ============================================================
-# AUTO TRADING RUN
+# Run auto trading
 # ============================================================
 
 @app.post("/api/auto-trading/run")
 def run_auto_trading():
 
-    if not auto_trading[
-        "enabled"
-    ]:
+    if not auto_trading["enabled"]:
 
         return {
-
             "success": False,
-
-            "executed": False,
-
-            "message":
-                "Auto trading is disabled.",
-
-            "enabled": False,
-
+            "action": "DISABLED",
+            "message": "Auto-trading is disabled.",
             "paper_only": True,
         }
 
-    account = calculate_account_value()
+    market = get_market_data()
+
+    current_price = market["price"]
+
+    auto_trading["last_price"] = current_price
 
     # --------------------------------------------------------
-    # Daily loss protection
+    # First manage an existing position.
     # --------------------------------------------------------
 
-    if max_daily_loss_reached(
-        account[
-            "portfolio_value"
-        ]
-    ):
+    exit_result = check_position_exit(
+        current_price
+    )
 
-        auto_trading[
-            "enabled"
-        ] = False
+    if exit_result:
+
+        auto_trading["last_action"] = "SELL"
+        auto_trading["last_trade_time"] = time.time()
+        auto_trading["trades"] += 1
 
         return {
+            "success": True,
+            "action": "SELL",
+            "reason": "Risk exit",
+            "result": exit_result,
+            "paper_only": True,
+        }
 
+    # --------------------------------------------------------
+    # Risk protection
+    # --------------------------------------------------------
+
+    risk = get_risk_snapshot(
+        current_price
+    )
+
+    if risk["daily_loss_limit_hit"]:
+
+        return {
             "success": False,
+            "action": "RISK_BLOCK",
+            "message": "Daily loss limit reached.",
+            "risk": risk,
+            "paper_only": True,
+        }
 
-            "executed": False,
+    if risk["consecutive_loss_limit_hit"]:
 
-            "action": "RISK_STOP",
-
+        return {
+            "success": False,
+            "action": "RISK_BLOCK",
             "message": (
-                "Auto trading stopped: "
-                "maximum daily loss limit reached."
+                "Maximum consecutive losses reached."
             ),
-
-            "risk":
-                get_risk_snapshot(
-                    account[
-                        "btc_price"
-                    ]
-                ),
-
+            "risk": risk,
             "paper_only": True,
         }
-
-    # --------------------------------------------------------
-    # Consecutive-loss protection
-    # --------------------------------------------------------
-
-    if max_consecutive_losses_reached():
-
-        auto_trading[
-            "enabled"
-        ] = False
-
-        return {
-
-            "success": False,
-
-            "executed": False,
-
-            "action": "RISK_STOP",
-
-            "message": (
-                "Auto trading stopped: "
-                "maximum consecutive losses reached."
-            ),
-
-            "risk":
-                get_risk_snapshot(
-                    account[
-                        "btc_price"
-                    ]
-                ),
-
-            "paper_only": True,
-        }
-
-    # --------------------------------------------------------
-    # Existing position management
-    # --------------------------------------------------------
-
-    if paper_account["btc"] > 0:
-
-        market = get_market_data()
-
-        current_price = market[
-            "price"
-        ]
-
-        exit_reason = (
-            position_exit_reason(
-                current_price
-            )
-        )
-
-        if exit_reason:
-
-            result = execute_paper_sell(
-                confidence=100.0,
-                reason=exit_reason
-            )
-
-            auto_trading[
-                "last_action"
-            ] = "SELL"
-
-            auto_trading[
-                "last_price"
-            ] = current_price
-
-            auto_trading[
-                "last_trade_time"
-            ] = utc_iso()
-
-            auto_trading[
-                "trades"
-            ] += 1
-
-            return {
-
-                "success": True,
-
-                "executed": True,
-
-                "action": "SELL",
-
-                "confidence": 100.0,
-
-                "message": exit_reason,
-
-                "result": result,
-
-                "paper_only": True,
-            }
 
     # --------------------------------------------------------
     # Cooldown
     # --------------------------------------------------------
 
-    if cooldown_active():
+    if auto_trading["last_trade_time"]:
 
-        return {
+        elapsed = (
+            time.time()
+            - auto_trading["last_trade_time"]
+        )
 
-            "success": True,
+        if (
+            elapsed
+            < RISK_SETTINGS[
+                "trade_cooldown_seconds"
+            ]
+        ):
 
-            "executed": False,
-
-            "action": "COOLDOWN",
-
-            "message": (
-                "Auto trading is waiting "
-                "for the configured cooldown."
-            ),
-
-            "cooldown_remaining":
-                cooldown_remaining(),
-
-            "paper_only": True,
-        }
+            return {
+                "success": False,
+                "action": "COOLDOWN",
+                "message": (
+                    "Trading cooldown is active."
+                ),
+                "seconds_remaining": round(
+                    RISK_SETTINGS[
+                        "trade_cooldown_seconds"
+                    ]
+                    - elapsed,
+                    2
+                ),
+                "paper_only": True,
+            }
 
     # --------------------------------------------------------
     # Generate signal
     # --------------------------------------------------------
 
-    analysis = generate_signal()
+    signal_data = generate_signal()
 
-    action = analysis[
-        "action"
-    ]
+    action = signal_data["action"]
+    confidence = signal_data["confidence"]
 
-    confidence = analysis[
-        "confidence"
-    ]
-
-    price = analysis[
-        "price"
-    ]
-
-    auto_trading[
-        "last_signal"
-    ] = action
-
-    auto_trading[
-        "last_price"
-    ] = price
+    auto_trading["last_signal"] = action
 
     # --------------------------------------------------------
     # Confidence filter
     # --------------------------------------------------------
 
-    if confidence < RISK_SETTINGS[
-        "minimum_confidence"
-    ]:
+    if (
+        confidence
+        < RISK_SETTINGS["minimum_confidence"]
+    ):
+
+        auto_trading["last_action"] = "HOLD"
 
         return {
-
             "success": True,
-
-            "executed": False,
-
-            "action": action,
-
-            "confidence": confidence,
-
+            "action": "HOLD",
             "message": (
-                "Signal rejected by "
-                "minimum-confidence "
-                "risk filter."
+                "Signal confidence is below "
+                "the configured threshold."
             ),
-
-            "minimum_confidence":
-                RISK_SETTINGS[
-                    "minimum_confidence"
-                ],
-
+            "signal": signal_data,
             "paper_only": True,
         }
 
@@ -2304,59 +1504,35 @@ def run_auto_trading():
 
         if paper_account["btc"] > 0:
 
+            auto_trading["last_action"] = "HOLD"
+
             return {
-
                 "success": True,
-
-                "executed": False,
-
-                "action": "BUY",
-
-                "confidence": confidence,
-
+                "action": "HOLD",
                 "message": (
-                    "BUY blocked because "
-                    "a BTC position is "
-                    "already open."
+                    "BTC position already exists."
                 ),
-
+                "signal": signal_data,
                 "paper_only": True,
             }
 
         result = execute_paper_buy(
-            confidence=confidence,
-            reason=analysis[
-                "description"
-            ]
+            source="auto",
+            reason=(
+                "AI BUY signal "
+                f"confidence={confidence}%"
+            )
         )
 
-        auto_trading[
-            "last_action"
-        ] = "BUY"
-
-        auto_trading[
-            "last_trade_time"
-        ] = utc_iso()
-
-        auto_trading[
-            "trades"
-        ] += 1
+        auto_trading["last_action"] = "BUY"
+        auto_trading["last_trade_time"] = time.time()
+        auto_trading["trades"] += 1
 
         return {
-
             "success": True,
-
-            "executed": True,
-
             "action": "BUY",
-
-            "confidence": confidence,
-
-            "message":
-                "AI paper BUY executed.",
-
+            "signal": signal_data,
             "result": result,
-
             "paper_only": True,
         }
 
@@ -2368,59 +1544,35 @@ def run_auto_trading():
 
         if paper_account["btc"] <= 0:
 
+            auto_trading["last_action"] = "HOLD"
+
             return {
-
                 "success": True,
-
-                "executed": False,
-
-                "action": "SELL",
-
-                "confidence": confidence,
-
+                "action": "HOLD",
                 "message": (
-                    "SELL signal received, "
-                    "but there is no BTC "
-                    "position."
+                    "No BTC position available to sell."
                 ),
-
+                "signal": signal_data,
                 "paper_only": True,
             }
 
         result = execute_paper_sell(
-            confidence=confidence,
-            reason=analysis[
-                "description"
-            ]
+            source="auto",
+            reason=(
+                "AI SELL signal "
+                f"confidence={confidence}%"
+            )
         )
 
-        auto_trading[
-            "last_action"
-        ] = "SELL"
-
-        auto_trading[
-            "last_trade_time"
-        ] = utc_iso()
-
-        auto_trading[
-            "trades"
-        ] += 1
+        auto_trading["last_action"] = "SELL"
+        auto_trading["last_trade_time"] = time.time()
+        auto_trading["trades"] += 1
 
         return {
-
             "success": True,
-
-            "executed": True,
-
             "action": "SELL",
-
-            "confidence": confidence,
-
-            "message":
-                "AI paper SELL executed.",
-
+            "signal": signal_data,
             "result": result,
-
             "paper_only": True,
         }
 
@@ -2428,247 +1580,106 @@ def run_auto_trading():
     # HOLD
     # --------------------------------------------------------
 
-    auto_trading[
-        "last_action"
-    ] = "HOLD"
+    auto_trading["last_action"] = "HOLD"
 
     return {
-
         "success": True,
-
-        "executed": False,
-
         "action": "HOLD",
-
-        "confidence": confidence,
-
-        "message": (
-            "AI recommends HOLD. "
-            "No paper trade executed."
-        ),
-
-        "analysis": analysis,
-
+        "signal": signal_data,
+        "message": "No trade executed.",
         "paper_only": True,
     }
 
 
 # ============================================================
-# TRADES
-# ============================================================
-
-@app.get("/api/trades")
-def get_trades():
-
-    return {
-
-        "success": True,
-
-        "count":
-            len(trade_history),
-
-        "trades":
-            list(
-                reversed(
-                    trade_history
-                )
-            ),
-
-        "paper_only": True,
-    }
-
-
-# ============================================================
-# RISK SETTINGS
-# ============================================================
-
-@app.get("/api/risk-settings")
-def get_risk_settings():
-
-    return {
-
-        "success": True,
-
-        "risk_settings":
-            RISK_SETTINGS,
-
-        "risk":
-            get_risk_snapshot(),
-
-        "paper_only": True,
-    }
-
-
-# ============================================================
-# RESET
+# Reset paper account
 # ============================================================
 
 @app.post("/api/paper-account/reset")
 def reset_paper_account():
 
-    paper_account[
-        "cash"
-    ] = paper_account[
-        "starting_balance"
-    ]
+    global paper_account
+    global trade_history
 
-    paper_account[
-        "btc"
-    ] = 0.0
+    paper_account = {
+        "starting_balance": 10000.0,
+        "cash": 10000.0,
+        "btc": 0.0,
+        "entry_price": None,
+        "last_action": "NONE",
+        "profit_loss": 0.0,
+        "realized_profit_loss": 0.0,
+        "unrealized_profit_loss": 0.0,
+        "portfolio_value": 10000.0,
+    }
 
-    paper_account[
-        "entry_price"
-    ] = None
+    trade_history = []
 
-    paper_account[
-        "last_action"
-    ] = "NONE"
-
-    paper_account[
-        "profit_loss"
-    ] = 0.0
-
-    paper_account[
-        "realized_profit_loss"
-    ] = 0.0
-
-    paper_account[
-        "unrealized_profit_loss"
-    ] = 0.0
-
-    paper_account[
-        "portfolio_value"
-    ] = paper_account[
-        "starting_balance"
-    ]
-
-    paper_account[
-        "daily_start_value"
-    ] = paper_account[
-        "starting_balance"
-    ]
-
-    paper_account[
-        "daily_start_date"
-    ] = (
-        utc_now()
-        .date()
-        .isoformat()
-    )
-
-    trade_history.clear()
-
-    auto_trading[
-        "enabled"
-    ] = False
-
-    auto_trading[
-        "last_signal"
-    ] = "NONE"
-
-    auto_trading[
-        "last_action"
-    ] = "NONE"
-
-    auto_trading[
-        "last_price"
-    ] = None
-
-    auto_trading[
-        "last_trade_time"
-    ] = None
-
-    auto_trading[
-        "trades"
-    ] = 0
-
-    auto_trading[
-        "wins"
-    ] = 0
-
-    auto_trading[
-        "losses"
-    ] = 0
-
-    auto_trading[
-        "consecutive_losses"
-    ] = 0
+    auto_trading["last_signal"] = "NONE"
+    auto_trading["last_action"] = "NONE"
+    auto_trading["last_price"] = None
+    auto_trading["last_trade_time"] = None
+    auto_trading["trades"] = 0
+    auto_trading["wins"] = 0
+    auto_trading["losses"] = 0
 
     return {
-
         "success": True,
-
-        "message":
-            "Paper account reset successfully.",
-
-        "account":
-            calculate_account_value(),
-
+        "message": "Paper account has been reset.",
+        "account": paper_account,
         "paper_only": True,
     }
 
 
 # ============================================================
-# BACKTEST
+# Backtest
 # ============================================================
 
-def run_backtest(
-    initial_capital: float,
-    strategy: str
-) -> Dict[str, Any]:
+@app.post("/api/backtest")
+def backtest(
+    days: int = 30
+):
 
-    prices = get_price_history(
-        days=30
+    prices = get_historical_prices(
+        days
     )
 
-    if len(prices) < 20:
+    if len(prices) < 30:
 
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Not enough historical "
-                "data for backtesting."
-            )
+            detail="Not enough historical data for backtest."
         )
 
-    cash = initial_capital
-
+    starting_cash = 10000.0
+    cash = starting_cash
     btc = 0.0
 
     entry_price = None
 
-    completed_trades = []
-
+    trades = 0
     wins = 0
-
     losses = 0
 
-    strategy_name = strategy.upper()
+    equity_curve = []
 
-    for index in range(
-        14,
-        len(prices)
-    ):
+    for index in range(20, len(prices)):
 
-        window = prices[
-            :index + 1
-        ]
+        current_price = prices[index]
 
-        current_price = window[
-            -1
-        ]
+        window = prices[:index + 1]
 
         rsi = calculate_rsi(
             window,
             14
         )
 
-        short_ma = moving_average(
+        short_ma = calculate_sma(
             window,
             5
         )
 
-        long_ma = moving_average(
+        long_ma = calculate_sma(
             window,
             14
         )
@@ -2678,334 +1689,192 @@ def run_backtest(
             or short_ma is None
             or long_ma is None
         ):
-
             continue
 
-        action = "HOLD"
+        score = 50
 
-        if strategy_name in {
-            "RSI_MA",
-            "RSI+MA",
-            "DEFAULT"
-        }:
+        if rsi < 30:
+            score += 20
 
-            if (
-                rsi < 35
-                and short_ma > long_ma
-                and btc == 0
-            ):
+        elif rsi < 40:
+            score += 10
 
-                action = "BUY"
+        elif rsi > 70:
+            score -= 20
 
-            elif (
-                rsi > 65
-                and btc > 0
-            ):
+        elif rsi > 60:
+            score -= 10
 
-                action = "SELL"
+        if short_ma > long_ma:
+            score += 20
 
-        elif strategy_name in {
-            "MA",
-            "MOVING_AVERAGE"
-        }:
+        else:
+            score -= 20
 
-            if (
-                short_ma > long_ma
-                and btc == 0
-            ):
+        if current_price > long_ma:
+            score += 10
 
-                action = "BUY"
+        else:
+            score -= 10
 
-            elif (
-                short_ma < long_ma
-                and btc > 0
-            ):
+        score = clamp(
+            score,
+            0,
+            100
+        )
 
-                action = "SELL"
+        signal_action = (
+            "BUY"
+            if score >= 65
+            else
+            "SELL"
+            if score <= 35
+            else
+            "HOLD"
+        )
 
+        # BUY
         if (
-            action == "BUY"
+            signal_action == "BUY"
             and btc == 0
         ):
 
-            allocation = (
-                cash
-                * (
-                    RISK_SETTINGS[
-                        "max_position_percent"
-                    ]
-                    / 100
-                )
-            )
+            amount = cash * 0.10
 
-            if allocation > 0:
+            if amount > 0:
 
-                btc = (
-                    allocation
-                    / current_price
-                )
+                btc = amount / current_price
+                cash -= amount
+                entry_price = current_price
 
-                cash -= allocation
+                trades += 1
 
-                entry_price = (
-                    current_price
-                )
-
+        # SELL
         elif (
-            action == "SELL"
+            signal_action == "SELL"
             and btc > 0
         ):
 
-            proceeds = (
-                btc
-                * current_price
-            )
+            proceeds = btc * current_price
 
-            pnl = (
-                current_price
-                - entry_price
-            ) * btc
+            pnl = 0.0
+
+            if entry_price is not None:
+                pnl = (
+                    current_price
+                    - entry_price
+                ) * btc
+
+            cash += proceeds
+            btc = 0.0
+            entry_price = None
+
+            trades += 1
 
             if pnl > 0:
-
                 wins += 1
 
             elif pnl < 0:
-
                 losses += 1
 
-            completed_trades.append({
+        equity = (
+            cash
+            + btc * current_price
+        )
 
-                "entry_price":
-                    round(
-                        entry_price,
-                        2
-                    ),
-
-                "exit_price":
-                    round(
-                        current_price,
-                        2
-                    ),
-
-                "quantity":
-                    round(
-                        btc,
-                        8
-                    ),
-
-                "pnl":
-                    round(
-                        pnl,
-                        2
-                    ),
-            })
-
-            cash += proceeds
-
-            btc = 0.0
-
-            entry_price = None
+        equity_curve.append(equity)
 
     final_price = prices[-1]
 
     final_value = (
         cash
-        + (
-            btc
-            * final_price
-        )
+        + btc * final_price
     )
 
-    total_return = (
-        (
-            final_value
-            - initial_capital
-        )
-        / initial_capital
-    ) * 100
-
-    total_closed = (
-        wins
-        + losses
-    )
-
-    win_rate = (
-        (
-            wins
-            / total_closed
-        ) * 100
-        if total_closed > 0
-        else 0.0
+    buy_hold_btc = (
+        starting_cash
+        / prices[0]
     )
 
     buy_hold_value = (
-        initial_capital
-        / prices[0]
-    ) * final_price
+        buy_hold_btc
+        * final_price
+    )
+
+    strategy_return = (
+        (
+            final_value
+            / starting_cash
+        ) - 1
+    ) * 100
 
     buy_hold_return = (
         (
             buy_hold_value
-            - initial_capital
-        )
-        / initial_capital
+            / starting_cash
+        ) - 1
     ) * 100
 
+    win_rate = (
+        wins / (wins + losses) * 100
+        if wins + losses > 0
+        else 0.0
+    )
+
     return {
-
         "success": True,
-
-        "asset": "BTC",
-
-        "strategy": strategy_name,
-
-        "initial_capital":
-            round(
-                initial_capital,
-                2
-            ),
-
-        "final_value":
-            round(
-                final_value,
-                2
-            ),
-
-        "total_return":
-            round(
-                total_return,
-                2
-            ),
-
-        "return":
-            round(
-                total_return,
-                2
-            ),
-
-        "buy_and_hold_return":
-            round(
-                buy_hold_return,
-                2
-            ),
-
-        "win_rate":
-            round(
-                win_rate,
-                2
-            ),
-
-        "winning_trades":
-            wins,
-
-        "losing_trades":
-            losses,
-
-        "closed_trades":
-            total_closed,
-
-        "open_position":
-            btc > 0,
-
-        "historical_data_points":
-            len(prices),
-
-        "paper_simulation":
-            True,
-
-        "generated_at":
-            utc_iso(),
+        "strategy": "RSI + Moving Average",
+        "days": days,
+        "data_points": len(prices),
+        "starting_balance": starting_cash,
+        "final_value": round(
+            final_value,
+            2
+        ),
+        "strategy_return_percent": round(
+            strategy_return,
+            2
+        ),
+        "buy_and_hold_return_percent": round(
+            buy_hold_return,
+            2
+        ),
+        "trades": trades,
+        "wins": wins,
+        "losses": losses,
+        "win_rate_percent": round(
+            win_rate,
+            2
+        ),
+        "paper_only": True,
+        "note": (
+            "Historical simulation only. "
+            "Past performance does not guarantee "
+            "future results."
+        ),
     }
 
 
 # ============================================================
-# BACKTEST ENDPOINT
-# ============================================================
-
-@app.post("/api/backtest")
-def backtest(
-    request: BacktestRequest
-):
-
-    if request.asset.upper() != "BTC":
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "The current backtest engine "
-                "supports BTC only."
-            )
-        )
-
-    return run_backtest(
-        initial_capital=
-            request.initial_capital,
-
-        strategy=
-            request.strategy
-    )
-
-
-# ============================================================
-# STARTUP
+# Startup
 # ============================================================
 
 @app.on_event("startup")
 def startup_event():
 
     print("=" * 60)
-
-    print("UPUPWAY AI BACKEND")
-
-    print("=" * 60)
-
-    print(
-        f"Version: {VERSION}"
-    )
-
-    print(
-        "Status: ONLINE"
-    )
-
-    print(
-        "Mode: PAPER TRADING"
-    )
-
-    print(
-        "Market Data: "
-        "CoinGecko + resilient cache"
-    )
-
-    print(
-        "Market Cache TTL: "
-        f"{MARKET_CACHE_TTL}s"
-    )
-
-    print(
-        "Provider Min Interval: "
-        f"{PROVIDER_MIN_INTERVAL}s"
-    )
-
-    print(
-        "Signal Engine: "
-        "RSI + Moving Average"
-    )
-
-    print(
-        "Risk Engine: "
-        "Position + SL + TP + Daily Loss"
-    )
-
-    print(
-        "Real Money Trading: DISABLED"
-    )
-
+    print(f"{APP_NAME} backend starting")
+    print(f"Version: {VERSION}")
+    print(f"Build: {BUILD_ID}")
+    print("Mode: PAPER TRADING")
+    print("Real-money trading: DISABLED")
+    print("Market provider: CoinGecko")
+    print("Signal engine: RSI + MA + Local History")
     print("=" * 60)
 
 
 # ============================================================
-# LOCAL DEVELOPMENT
+# Local development
 # ============================================================
 
 if __name__ == "__main__":
@@ -3013,8 +1882,7 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-        "main:app",
+        app,
         host="0.0.0.0",
         port=8000,
-        reload=False,
 )
