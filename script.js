@@ -1,140 +1,148 @@
 /* =========================================================
-   UPUPWAY AI
-   FRONTEND ENGINE
-   PAPER TRADING ONLY
+UPUPWAY AI
+FRONTEND ENGINE
+PAPER TRADING ONLY
+VERSION: FRONTEND 1.6.0
 ========================================================= */
 
-
 /* =========================================================
-   API CONFIGURATION
+API CONFIGURATION
 ========================================================= */
 
 const API_BASE_URL = "https://upupway-ai.onrender.com";
 
+const MARKET_REFRESH_MS = 120000;
+const SIGNAL_REFRESH_MS = 30000;
+const PORTFOLIO_REFRESH_MS = 10000;
+const AUTO_STATUS_REFRESH_MS = 10000;
+const TRADE_HISTORY_REFRESH_MS = 15000;
 
 /* =========================================================
-   GLOBAL STATE
+GLOBAL STATE
 ========================================================= */
 
 let currentMarket = null;
 let currentSignal = null;
 let autoTradingEnabled = false;
 
-
 /* =========================================================
-   DOM HELPER
+DOM HELPER
 ========================================================= */
 
 function $(id) {
-    return document.getElementById(id);
+return document.getElementById(id);
 }
 
-
 /* =========================================================
-   API HELPER
+API HELPER
 ========================================================= */
 
 async function apiRequest(endpoint, options = {}) {
 
-    const url = `${API_BASE_URL}${endpoint}`;
+const url = `${API_BASE_URL}${endpoint}`;
+
+try {
+
+    const response = await fetch(url, {
+        ...options,
+
+        headers: {
+            "Content-Type": "application/json",
+            ...(options.headers || {})
+        }
+    });
+
+    const text = await response.text();
+
+    let data = {};
 
     try {
-
-        const response = await fetch(url, {
-            ...options,
-
-            headers: {
-                "Content-Type": "application/json",
-                ...(options.headers || {})
-            }
-        });
-
-        const text = await response.text();
-
-        let data = {};
-
-        try {
-            data = text ? JSON.parse(text) : {};
-        } catch {
-            data = {
-                raw: text
-            };
-        }
-
-        if (!response.ok) {
-
-            const message =
-                data.detail ||
-                data.message ||
-                data.error ||
-                data.raw ||
-                `HTTP ${response.status}`;
-
-            throw new Error(message);
-        }
-
-        return data;
-
-    } catch (error) {
-
-        console.error(
-            `UpUpway API error: ${endpoint}`,
-            error
-        );
-
-        throw error;
+        data = text ? JSON.parse(text) : {};
+    } catch {
+        data = {
+            raw: text
+        };
     }
+
+    if (!response.ok) {
+
+        const message =
+            data.detail ||
+            data.message ||
+            data.error ||
+            data.raw ||
+            `HTTP ${response.status}`;
+
+        throw new Error(message);
+    }
+
+    return data;
+
+} catch (error) {
+
+    console.error(
+        `UpUpway API error: ${endpoint}`,
+        error
+    );
+
+    throw error;
 }
 
+}
 
 /* =========================================================
-   FORMATTERS
+FORMATTERS
 ========================================================= */
 
 function formatCurrency(value) {
 
-    const number = Number(value);
+const number = Number(value);
 
-    if (!Number.isFinite(number)) {
-        return "$0.00";
-    }
-
-    return new Intl.NumberFormat("en-US", {
-        style: "currency",
-        currency: "USD",
-        maximumFractionDigits: 2
-    }).format(number);
+if (!Number.isFinite(number)) {
+    return "$0.00";
 }
 
+return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2
+}).format(number);
+
+}
 
 function formatNumber(value, decimals = 6) {
 
-    const number = Number(value);
+const number = Number(value);
 
-    if (!Number.isFinite(number)) {
-        return "0";
-    }
-
-    return number.toLocaleString("en-US", {
-        maximumFractionDigits: decimals
-    });
+if (!Number.isFinite(number)) {
+    return "0";
 }
 
+return number.toLocaleString("en-US", {
+    maximumFractionDigits: decimals
+});
+
+}
 
 function formatPercent(value) {
 
-    const number = Number(value);
+const number = Number(value);
 
-    if (!Number.isFinite(number)) {
-        return "0.00%";
-    }
-
-    return `${number >= 0 ? "+" : ""}${number.toFixed(2)}%`;
+if (!Number.isFinite(number)) {
+    return "0.00%";
 }
 
+return `${number >= 0 ? "+" : ""}${number.toFixed(2)}%`;
 
-function formatTime() {
+}
 
+function formatTime(value = null) {
+
+const date = value
+    ? new Date(value)
+    : new Date();
+
+if (Number.isNaN(date.getTime())) {
     return new Date().toLocaleTimeString([], {
         hour: "2-digit",
         minute: "2-digit",
@@ -142,405 +150,579 @@ function formatTime() {
     });
 }
 
+return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+});
+
+}
 
 /* =========================================================
-   CONNECTION STATUS
+CONNECTION STATUS
 ========================================================= */
 
 function setConnectionStatus(online, message) {
 
-    const element = $("connectionStatus");
+const element = $("connectionStatus");
 
-    if (!element) {
-        return;
-    }
+if (!element) {
+    return;
+}
 
-    element.textContent = message;
+element.textContent = message;
 
-    element.classList.remove(
-        "connection-online",
-        "connection-offline"
+element.classList.remove(
+    "connection-online",
+    "connection-offline"
+);
+
+element.classList.add(
+    online
+        ? "connection-online"
+        : "connection-offline"
+);
+
+}
+
+/* =========================================================
+MARKET STATUS
+========================================================= */
+
+function setMarketStatus(
+state,
+label,
+updatedText = null
+) {
+
+const status = $("marketStatus");
+
+if (status) {
+
+    status.textContent = label;
+
+    status.classList.remove(
+        "online",
+        "cached",
+        "connecting",
+        "offline",
+        "stale"
     );
 
-    element.classList.add(
-        online
-            ? "connection-online"
-            : "connection-offline"
+    status.classList.add(state);
+}
+
+if (
+    updatedText &&
+    $("marketUpdated")
+) {
+
+    $("marketUpdated").textContent =
+        updatedText;
+}
+
+}
+
+/* =========================================================
+MARKET REQUEST STATE
+========================================================= */
+
+function setMarketConnecting() {
+
+setMarketStatus(
+    "connecting",
+    "● CONNECTING",
+    "Connecting to market data..."
+);
+
+}
+
+function setMarketOffline(error = null) {
+
+setMarketStatus(
+    "offline",
+    "● OFFLINE",
+    "Market data unavailable"
+);
+
+setConnectionStatus(
+    false,
+    "Market data unavailable"
+);
+
+if (error) {
+
+    console.error(
+        "Market connection error:",
+        error
     );
 }
 
+}
+
+function updateMarketStatus(data) {
+
+const stale =
+    Boolean(data.stale);
+
+const cached =
+    Boolean(data.cached);
+
+const age =
+    Number(data.cache_age_seconds);
+
+
+if (stale) {
+
+    const ageText =
+        Number.isFinite(age)
+            ? ` • ${Math.round(age)}s old`
+            : "";
+
+    setMarketStatus(
+        "stale",
+        "● STALE DATA",
+        `Last available data${ageText}`
+    );
+
+    setConnectionStatus(
+        true,
+        "AI engine connected • stale market data"
+    );
+
+    return;
+}
+
+
+if (cached) {
+
+    const ageText =
+        Number.isFinite(age)
+            ? ` • ${Math.round(age)}s cache`
+            : "";
+
+    setMarketStatus(
+        "cached",
+        "● LIVE • CACHED",
+        `Updated ${formatTime(data.updated_at)}${ageText}`
+    );
+
+    setConnectionStatus(
+        true,
+        "AI engine connected"
+    );
+
+    return;
+}
+
+
+setMarketStatus(
+    "online",
+    "● LIVE",
+    `Updated ${formatTime(data.updated_at)}`
+);
+
+setConnectionStatus(
+    true,
+    "AI engine connected"
+);
+
+}
 
 /* =========================================================
-   MOBILE MENU
+MOBILE MENU
 ========================================================= */
 
 function setupMobileMenu() {
 
-    const menuButton = $("menuButton");
-    const nav = $("mainNav");
+const menuButton = $("menuButton");
+const nav = $("mainNav");
 
-    if (!menuButton || !nav) {
-        return;
-    }
-
-    menuButton.addEventListener("click", () => {
-
-        nav.classList.toggle("open");
-
-    });
-
-
-    nav.querySelectorAll("a").forEach(link => {
-
-        link.addEventListener("click", () => {
-
-            nav.classList.remove("open");
-
-        });
-
-    });
+if (!menuButton || !nav) {
+    return;
 }
 
+menuButton.addEventListener("click", () => {
+
+    nav.classList.toggle("open");
+
+});
+
+
+nav.querySelectorAll("a").forEach(link => {
+
+    link.addEventListener("click", () => {
+
+        nav.classList.remove("open");
+
+    });
+
+});
+
+}
 
 /* =========================================================
-   MARKET DATA
+MARKET DATA
 ========================================================= */
 
 async function fetchMarket() {
 
-    try {
+setMarketConnecting();
 
-        const data = await apiRequest("/api/market");
+try {
 
-        currentMarket = data;
+    const data =
+        await apiRequest("/api/market");
 
-        updateMarketUI(data);
+    currentMarket = data;
 
-        setConnectionStatus(
-            true,
-            "AI engine connected"
-        );
+    updateMarketUI(data);
 
-    } catch (error) {
+    updateMarketStatus(data);
 
-        setConnectionStatus(
-            false,
-            `Backend unavailable: ${error.message}`
-        );
+} catch (error) {
 
-        console.error(
-            "Market request failed:",
-            error
-        );
-    }
+    setMarketOffline(error);
 }
 
+}
 
 function updateMarketUI(data) {
 
-    const price =
-        Number(data.price);
+const price =
+    Number(data.price);
 
-    const change =
-        Number(data.change_24h);
-
-
-    /* BTC */
-
-    if ($("btcPrice")) {
-
-        $("btcPrice").textContent =
-            formatCurrency(price);
-
-    }
+const change =
+    Number(data.change_24h);
 
 
-    if ($("btcChange")) {
+/* BTC */
 
-        $("btcChange").textContent =
-            formatPercent(change);
+if ($("btcPrice")) {
 
-        setChangeClass(
-            $("btcChange"),
-            change
-        );
-    }
-
-
-    /*
-       ETH / SOL may not currently be supplied
-       by the backend. Keep the interface ready
-       without inventing market data.
-    */
-
-    if (data.eth_price !== undefined) {
-
-        $("ethPrice").textContent =
-            formatCurrency(data.eth_price);
-
-    }
-
-    if (data.eth_change_24h !== undefined) {
-
-        const ethChange =
-            Number(data.eth_change_24h);
-
-        $("ethChange").textContent =
-            formatPercent(ethChange);
-
-        setChangeClass(
-            $("ethChange"),
-            ethChange
-        );
-    }
-
-
-    if (data.sol_price !== undefined) {
-
-        $("solPrice").textContent =
-            formatCurrency(data.sol_price);
-
-    }
-
-    if (data.sol_change_24h !== undefined) {
-
-        const solChange =
-            Number(data.sol_change_24h);
-
-        $("solChange").textContent =
-            formatPercent(solChange);
-
-        setChangeClass(
-            $("solChange"),
-            solChange
-        );
-    }
-
-
-    if ($("marketUpdated")) {
-
-        $("marketUpdated").textContent =
-            `Updated ${formatTime()}`;
-    }
+    $("btcPrice").textContent =
+        formatCurrency(price);
 }
 
+
+if ($("btcChange")) {
+
+    $("btcChange").textContent =
+        formatPercent(change);
+
+    setChangeClass(
+        $("btcChange"),
+        change
+    );
+}
+
+
+/* ETH */
+
+if (
+    data.eth_price !== undefined &&
+    $("ethPrice")
+) {
+
+    $("ethPrice").textContent =
+        formatCurrency(data.eth_price);
+}
+
+
+if (
+    data.eth_change_24h !== undefined &&
+    $("ethChange")
+) {
+
+    const ethChange =
+        Number(data.eth_change_24h);
+
+    $("ethChange").textContent =
+        formatPercent(ethChange);
+
+    setChangeClass(
+        $("ethChange"),
+        ethChange
+    );
+}
+
+
+/* SOL */
+
+if (
+    data.sol_price !== undefined &&
+    $("solPrice")
+) {
+
+    $("solPrice").textContent =
+        formatCurrency(data.sol_price);
+}
+
+
+if (
+    data.sol_change_24h !== undefined &&
+    $("solChange")
+) {
+
+    const solChange =
+        Number(data.sol_change_24h);
+
+    $("solChange").textContent =
+        formatPercent(solChange);
+
+    setChangeClass(
+        $("solChange"),
+        solChange
+    );
+}
+
+
+if (
+    $("marketUpdated") &&
+    !data.stale &&
+    !data.cached
+) {
+
+    $("marketUpdated").textContent =
+        `Updated ${formatTime(data.updated_at)}`;
+}
+
+}
 
 function setChangeClass(element, value) {
 
-    if (!element) {
-        return;
-    }
-
-    element.classList.remove(
-        "positive",
-        "negative",
-        "neutral"
-    );
-
-    if (Number(value) > 0) {
-
-        element.classList.add("positive");
-
-    } else if (Number(value) < 0) {
-
-        element.classList.add("negative");
-
-    } else {
-
-        element.classList.add("neutral");
-    }
+if (!element) {
+    return;
 }
 
+element.classList.remove(
+    "positive",
+    "negative",
+    "neutral"
+);
+
+if (Number(value) > 0) {
+
+    element.classList.add("positive");
+
+} else if (Number(value) < 0) {
+
+    element.classList.add("negative");
+
+} else {
+
+    element.classList.add("neutral");
+}
+
+}
 
 /* =========================================================
-   AI SIGNAL
+AI SIGNAL
 ========================================================= */
 
 async function fetchSignal() {
 
-    try {
+try {
 
-        const data =
-            await apiRequest("/api/signal");
+    const data =
+        await apiRequest("/api/signal");
 
-        currentSignal = data;
+    currentSignal = data;
 
-        updateSignalUI(data);
+    updateSignalUI(data);
 
-    } catch (error) {
+} catch (error) {
 
-        console.error(
-            "Signal request failed:",
-            error
-        );
-
-        if ($("signalDescription")) {
-
-            $("signalDescription").textContent =
-                `Signal unavailable: ${error.message}`;
-        }
-    }
-}
-
-
-function updateSignalUI(data) {
-
-    const action =
-        String(
-            data.action ||
-            data.signal ||
-            data.decision ||
-            "HOLD"
-        ).toUpperCase();
-
-
-    const description =
-        data.description ||
-        data.reason ||
-        data.message ||
-        "Market analysis completed.";
-
-
-    const confidence =
-        Number(
-            data.confidence ||
-            data.confidence_score ||
-            0
-        );
-
-
-    const trend =
-        data.trend ||
-        data.market_trend ||
-        "—";
-
-
-    const rsi =
-        data.rsi;
-
-
-    const price =
-        data.price ||
-        data.current_price;
-
-
-    if ($("signalAction")) {
-
-        $("signalAction").textContent =
-            action;
-    }
-
-
-    if ($("signalBadge")) {
-
-        $("signalBadge").textContent =
-            action;
-
-        $("signalBadge").classList.remove(
-            "buy",
-            "sell",
-            "hold"
-        );
-
-        if (action === "BUY") {
-
-            $("signalBadge")
-                .classList.add("buy");
-
-        } else if (action === "SELL") {
-
-            $("signalBadge")
-                .classList.add("sell");
-
-        } else {
-
-            $("signalBadge")
-                .classList.add("hold");
-        }
-    }
-
+    console.error(
+        "Signal request failed:",
+        error
+    );
 
     if ($("signalDescription")) {
 
         $("signalDescription").textContent =
-            description;
+            "Signal unavailable. Waiting for the AI engine.";
     }
+}
+
+}
+
+function updateSignalUI(data) {
+
+const action =
+    String(
+        data.action ||
+        data.signal ||
+        data.decision ||
+        "HOLD"
+    ).toUpperCase();
 
 
-    if ($("confidenceValue")) {
-
-        $("confidenceValue").textContent =
-            `${confidence.toFixed(1)}%`;
-    }
-
-
-    if ($("confidenceBar")) {
-
-        const safeConfidence =
-            Math.max(
-                0,
-                Math.min(
-                    100,
-                    confidence
-                )
-            );
-
-        $("confidenceBar").style.width =
-            `${safeConfidence}%`;
-    }
+const description =
+    data.description ||
+    data.reason ||
+    data.message ||
+    "Market analysis completed.";
 
 
-    if ($("marketTrend")) {
-
-        $("marketTrend").textContent =
-            String(trend).toUpperCase();
-    }
-
-
-    if ($("rsiValue")) {
-
-        $("rsiValue").textContent =
-            Number.isFinite(Number(rsi))
-                ? Number(rsi).toFixed(2)
-                : "—";
-    }
-
-
-    if ($("signalPrice")) {
-
-        $("signalPrice").textContent =
-            Number.isFinite(Number(price))
-                ? formatCurrency(price)
-                : "—";
-    }
-
-
-    updateIntelligence(
-        action,
-        trend,
-        rsi
+const confidence =
+    Number(
+        data.confidence ??
+        data.confidence_score ??
+        0
     );
+
+
+const trend =
+    data.trend ||
+    data.market_trend ||
+    "—";
+
+
+const rsi =
+    data.rsi;
+
+
+const price =
+    data.price ??
+    data.current_price;
+
+
+if ($("signalAction")) {
+
+    $("signalAction").textContent =
+        action;
 }
 
 
-function updateIntelligence(
+if ($("signalBadge")) {
+
+    $("signalBadge").textContent =
+        action;
+
+    $("signalBadge").classList.remove(
+        "buy",
+        "sell",
+        "hold"
+    );
+
+    if (action === "BUY") {
+
+        $("signalBadge")
+            .classList.add("buy");
+
+    } else if (action === "SELL") {
+
+        $("signalBadge")
+            .classList.add("sell");
+
+    } else {
+
+        $("signalBadge")
+            .classList.add("hold");
+    }
+}
+
+
+if ($("signalDescription")) {
+
+    $("signalDescription").textContent =
+        description;
+}
+
+
+if ($("confidenceValue")) {
+
+    $("confidenceValue").textContent =
+        `${Number.isFinite(confidence)
+            ? confidence.toFixed(1)
+            : "0.0"}%`;
+}
+
+
+if ($("confidenceBar")) {
+
+    const safeConfidence =
+        Math.max(
+            0,
+            Math.min(
+                100,
+                Number.isFinite(confidence)
+                    ? confidence
+                    : 0
+            )
+        );
+
+    $("confidenceBar").style.width =
+        `${safeConfidence}%`;
+}
+
+
+if ($("marketTrend")) {
+
+    $("marketTrend").textContent =
+        String(trend).toUpperCase();
+}
+
+
+if ($("rsiValue")) {
+
+    $("rsiValue").textContent =
+        Number.isFinite(Number(rsi))
+            ? Number(rsi).toFixed(2)
+            : "—";
+}
+
+
+if ($("signalPrice")) {
+
+    $("signalPrice").textContent =
+        Number.isFinite(Number(price))
+            ? formatCurrency(price)
+            : "—";
+}
+
+
+updateIntelligence(
     action,
     trend,
-    rsi
+    rsi,
+    data.momentum
+);
+
+}
+
+function updateIntelligence(
+action,
+trend,
+rsi,
+momentum = null
 ) {
 
-    if ($("priceAction")) {
+if ($("priceAction")) {
 
-        $("priceAction").textContent =
-            action === "BUY"
-                ? "Bullish"
-                : action === "SELL"
-                    ? "Bearish"
-                    : "Neutral";
-    }
+    $("priceAction").textContent =
+        action === "BUY"
+            ? "Bullish"
+            : action === "SELL"
+                ? "Bearish"
+                : "Neutral";
+}
 
 
-    if ($("momentumStatus")) {
+if ($("momentumStatus")) {
+
+    if (momentum) {
+
+        $("momentumStatus").textContent =
+            String(momentum)
+                .replaceAll("_", " ")
+                .toLowerCase()
+                .replace(/\b\w/g, char =>
+                    char.toUpperCase()
+                );
+
+    } else {
 
         const rsiNumber =
             Number(rsi);
@@ -553,12 +735,12 @@ function updateIntelligence(
         } else if (rsiNumber >= 70) {
 
             $("momentumStatus")
-                .textContent = "Overbought";
+                .textContent = "Elevated";
 
         } else if (rsiNumber <= 30) {
 
             $("momentumStatus")
-                .textContent = "Oversold";
+                .textContent = "Weak";
 
         } else {
 
@@ -566,1105 +748,1121 @@ function updateIntelligence(
                 .textContent = "Balanced";
         }
     }
-
-
-    if ($("trendStatus")) {
-
-        $("trendStatus").textContent =
-            String(trend || "Monitoring")
-                .toUpperCase();
-    }
 }
 
 
+if ($("trendStatus")) {
+
+    $("trendStatus").textContent =
+        String(trend || "Monitoring")
+            .toUpperCase();
+}
+
+}
+
 /* =========================================================
-   PAPER ACCOUNT
+PAPER ACCOUNT
 ========================================================= */
 
 async function fetchPaperAccount() {
 
-    try {
+try {
 
-        const data =
-            await apiRequest(
-                "/api/paper-account"
-            );
-
-        updatePortfolioUI(data);
-
-    } catch (error) {
-
-        console.error(
-            "Paper account request failed:",
-            error
+    const data =
+        await apiRequest(
+            "/api/paper-account"
         );
-    }
+
+    updatePortfolioUI(data);
+
+} catch (error) {
+
+    console.error(
+        "Paper account request failed:",
+        error
+    );
 }
 
+}
 
 function updatePortfolioUI(data) {
 
-    const portfolioValue =
-        Number(
-            data.portfolio_value ||
-            data.total_equity ||
-            0
-        );
+const portfolioValue =
+    Number(
+        data.portfolio_value ??
+        data.total_equity ??
+        0
+    );
 
 
-    const cash =
-        Number(
-            data.cash ||
-            data.available_cash ||
-            0
-        );
+const cash =
+    Number(
+        data.cash ??
+        data.available_cash ??
+        0
+    );
 
 
-    const btc =
-        Number(
-            data.btc ||
-            data.btc_holdings ||
-            0
-        );
+const btc =
+    Number(
+        data.btc ??
+        data.btc_holdings ??
+        0
+    );
 
 
-    const pnl =
-        Number(
-            data.profit_loss ||
-            data.pnl ||
-            0
-        );
+const pnl =
+    Number(
+        data.profit_loss ??
+        data.pnl ??
+        0
+    );
 
 
-    if ($("portfolioValue")) {
+if ($("portfolioValue")) {
 
-        $("portfolioValue").textContent =
-            formatCurrency(
-                portfolioValue
-            );
-    }
-
-
-    if ($("cashValue")) {
-
-        $("cashValue").textContent =
-            formatCurrency(cash);
-    }
-
-
-    if ($("btcHolding")) {
-
-        $("btcHolding").textContent =
-            `${formatNumber(btc, 8)} BTC`;
-    }
-
-
-    if ($("totalPnl")) {
-
-        $("totalPnl").textContent =
-            formatCurrency(pnl);
-
-        $("totalPnl").style.color =
-            pnl > 0
-                ? "#46e49b"
-                : pnl < 0
-                    ? "#ff637b"
-                    : "";
-    }
+    $("portfolioValue").textContent =
+        formatCurrency(portfolioValue);
 }
 
 
+if ($("cashValue")) {
+
+    $("cashValue").textContent =
+        formatCurrency(cash);
+}
+
+
+if ($("btcHolding")) {
+
+    $("btcHolding").textContent =
+        `${formatNumber(btc, 8)} BTC`;
+}
+
+
+if ($("totalPnl")) {
+
+    $("totalPnl").textContent =
+        formatCurrency(pnl);
+
+    $("totalPnl").style.color =
+        pnl > 0
+            ? "#46e49b"
+            : pnl < 0
+                ? "#ff637b"
+                : "";
+}
+
+}
+
 /* =========================================================
-   MANUAL BUY
+MANUAL BUY
 ========================================================= */
 
 async function paperBuy() {
 
-    setTradeMessage(
-        "tradeMessage",
-        "Submitting simulated BUY...",
-        ""
-    );
+setTradeMessage(
+    "tradeMessage",
+    "Submitting simulated BUY...",
+    ""
+);
 
 
-    const button =
-        $("buyButton");
+const button = $("buyButton");
 
-    if (button) {
-        button.disabled = true;
-    }
-
-
-    try {
-
-        const data =
-            await apiRequest(
-                "/api/paper-buy",
-                {
-                    method: "POST"
-                }
-            );
-
-
-        setTradeMessage(
-            "tradeMessage",
-            data.message ||
-            "Paper BUY executed successfully.",
-            "success"
-        );
-
-
-        await fetchPaperAccount();
-        await fetchSignal();
-        await fetchAutoTradingStatus();
-
-    } catch (error) {
-
-        setTradeMessage(
-            "tradeMessage",
-            `BUY failed: ${error.message}`,
-            "error"
-        );
-
-    } finally {
-
-        if (button) {
-            button.disabled = false;
-        }
-    }
+if (button) {
+    button.disabled = true;
 }
 
 
+try {
+
+    const data =
+        await apiRequest(
+            "/api/paper-buy",
+            {
+                method: "POST"
+            }
+        );
+
+
+    setTradeMessage(
+        "tradeMessage",
+        data.message ||
+        "Paper BUY executed successfully.",
+        "success"
+    );
+
+
+    await fetchPaperAccount();
+    await fetchSignal();
+    await fetchAutoTradingStatus();
+    await fetchTradeHistory();
+
+} catch (error) {
+
+    setTradeMessage(
+        "tradeMessage",
+        `BUY failed: ${error.message}`,
+        "error"
+    );
+
+} finally {
+
+    if (button) {
+        button.disabled = false;
+    }
+}
+
+}
+
 /* =========================================================
-   MANUAL SELL
+MANUAL SELL
 ========================================================= */
 
 async function paperSell() {
 
-    setTradeMessage(
-        "tradeMessage",
-        "Submitting simulated SELL...",
-        ""
-    );
+setTradeMessage(
+    "tradeMessage",
+    "Submitting simulated SELL...",
+    ""
+);
 
 
-    const button =
-        $("sellButton");
+const button = $("sellButton");
 
-    if (button) {
-        button.disabled = true;
-    }
-
-
-    try {
-
-        const data =
-            await apiRequest(
-                "/api/paper-sell",
-                {
-                    method: "POST"
-                }
-            );
-
-
-        setTradeMessage(
-            "tradeMessage",
-            data.message ||
-            "Paper SELL executed successfully.",
-            "success"
-        );
-
-
-        await fetchPaperAccount();
-        await fetchSignal();
-        await fetchAutoTradingStatus();
-
-    } catch (error) {
-
-        setTradeMessage(
-            "tradeMessage",
-            `SELL failed: ${error.message}`,
-            "error"
-        );
-
-    } finally {
-
-        if (button) {
-            button.disabled = false;
-        }
-    }
+if (button) {
+    button.disabled = true;
 }
 
 
+try {
+
+    const data =
+        await apiRequest(
+            "/api/paper-sell",
+            {
+                method: "POST"
+            }
+        );
+
+
+    setTradeMessage(
+        "tradeMessage",
+        data.message ||
+        "Paper SELL executed successfully.",
+        "success"
+    );
+
+
+    await fetchPaperAccount();
+    await fetchSignal();
+    await fetchAutoTradingStatus();
+    await fetchTradeHistory();
+
+} catch (error) {
+
+    setTradeMessage(
+        "tradeMessage",
+        `SELL failed: ${error.message}`,
+        "error"
+    );
+
+} finally {
+
+    if (button) {
+        button.disabled = false;
+    }
+}
+
+}
+
 /* =========================================================
-   AUTO TRADING STATUS
+AUTO TRADING STATUS
 ========================================================= */
 
 async function fetchAutoTradingStatus() {
 
-    try {
+try {
 
-        const data =
-            await apiRequest(
-                "/api/auto-trading"
-            );
-
-        autoTradingEnabled =
-            Boolean(data.enabled);
-
-        updateAutoTradingUI(data);
-
-    } catch (error) {
-
-        console.error(
-            "Auto-trading status failed:",
-            error
+    const data =
+        await apiRequest(
+            "/api/auto-trading"
         );
 
-        setTradeMessage(
-            "autoMessage",
-            `Auto-trading status unavailable: ${error.message}`,
-            "error"
-        );
-    }
+    autoTradingEnabled =
+        Boolean(data.enabled);
+
+    updateAutoTradingUI(data);
+
+} catch (error) {
+
+    console.error(
+        "Auto-trading status failed:",
+        error
+    );
+
+    setTradeMessage(
+        "autoMessage",
+        "Auto-trading status unavailable.",
+        "error"
+    );
 }
 
+}
 
 function updateAutoTradingUI(data) {
 
-    const enabled =
-        Boolean(data.enabled);
+const enabled =
+    Boolean(data.enabled);
 
-    autoTradingEnabled =
-        enabled;
-
-
-    const badge =
-        $("autoStatusBadge");
-
-    const button =
-        $("autoToggleButton");
+autoTradingEnabled =
+    enabled;
 
 
-    if (badge) {
+const badge =
+    $("autoStatusBadge");
 
-        badge.textContent =
-            enabled
-                ? "ON"
-                : "OFF";
-
-        badge.classList.remove(
-            "on",
-            "off"
-        );
-
-        badge.classList.add(
-            enabled
-                ? "on"
-                : "off"
-        );
-    }
+const button =
+    $("autoToggleButton");
 
 
-    if (button) {
+if (badge) {
 
-        button.textContent =
-            enabled
-                ? "DISABLE AUTO-TRADING"
-                : "ENABLE AUTO-TRADING";
+    badge.textContent =
+        enabled
+            ? "ON"
+            : "OFF";
 
-        button.classList.toggle(
-            "enabled",
-            enabled
-        );
-    }
+    badge.classList.remove(
+        "on",
+        "off"
+    );
 
-
-    if ($("riskPosition") &&
-        data.risk_settings) {
-
-        const value =
-            data.risk_settings
-                .max_position_percent;
-
-        if (value !== undefined) {
-
-            $("riskPosition")
-                .textContent =
-                `${value}%`;
-        }
-    }
-
-
-    if ($("riskConfidence") &&
-        data.risk_settings) {
-
-        const value =
-            data.risk_settings
-                .minimum_confidence;
-
-        if (value !== undefined) {
-
-            $("riskConfidence")
-                .textContent =
-                `${value}%`;
-        }
-    }
-
-
-    if ($("riskCooldown") &&
-        data.risk_settings) {
-
-        const value =
-            data.risk_settings
-                .trade_cooldown_seconds;
-
-        if (value !== undefined) {
-
-            $("riskCooldown")
-                .textContent =
-                `${value}s`;
-        }
-    }
-
-
-    updateTradeStats(data);
+    badge.classList.add(
+        enabled
+            ? "on"
+            : "off"
+    );
 }
 
 
+if (button) {
+
+    button.textContent =
+        enabled
+            ? "DISABLE AUTO-TRADING"
+            : "ENABLE AUTO-TRADING";
+
+    button.classList.toggle(
+        "enabled",
+        enabled
+    );
+}
+
+
+if (
+    $("riskPosition") &&
+    data.risk_settings
+) {
+
+    const value =
+        data.risk_settings
+            .max_position_percent;
+
+    if (value !== undefined) {
+
+        $("riskPosition")
+            .textContent =
+            `${value}%`;
+    }
+}
+
+
+if (
+    $("riskConfidence") &&
+    data.risk_settings
+) {
+
+    const value =
+        data.risk_settings
+            .minimum_confidence;
+
+    if (value !== undefined) {
+
+        $("riskConfidence")
+            .textContent =
+            `${value}%`;
+    }
+}
+
+
+if (
+    $("riskCooldown") &&
+    data.risk_settings
+) {
+
+    const value =
+        data.risk_settings
+            .trade_cooldown_seconds;
+
+    if (value !== undefined) {
+
+        $("riskCooldown")
+            .textContent =
+            `${value}s`;
+    }
+}
+
+
+updateTradeStats(data);
+
+}
+
 /* =========================================================
-   AUTO TRADING TOGGLE
+AUTO TRADING TOGGLE
 ========================================================= */
 
 async function toggleAutoTrading() {
 
-    const button =
-        $("autoToggleButton");
+const button =
+    $("autoToggleButton");
+
+if (button) {
+    button.disabled = true;
+}
 
 
-    if (button) {
-        button.disabled = true;
-    }
+setTradeMessage(
+    "autoMessage",
+    "Changing AI trading status...",
+    ""
+);
+
+
+try {
+
+    const data =
+        await apiRequest(
+            "/api/auto-trading/toggle",
+            {
+                method: "POST"
+            }
+        );
+
+
+    autoTradingEnabled =
+        Boolean(data.enabled);
+
+
+    await fetchAutoTradingStatus();
 
 
     setTradeMessage(
         "autoMessage",
-        "Changing AI trading status...",
-        ""
+        data.message ||
+        (
+            autoTradingEnabled
+                ? "AI auto-trading enabled."
+                : "AI auto-trading disabled."
+        ),
+        "success"
     );
 
 
-    try {
+} catch (error) {
 
-        const data =
-            await apiRequest(
-                "/api/auto-trading/toggle",
-                {
-                    method: "POST"
-                }
-            );
+    setTradeMessage(
+        "autoMessage",
+        `Auto-trading error: ${error.message}`,
+        "error"
+    );
 
+    console.error(
+        "AUTO TOGGLE ERROR:",
+        error
+    );
 
-        autoTradingEnabled =
-            Boolean(data.enabled);
+} finally {
 
-
-        await fetchAutoTradingStatus();
-
-
-        setTradeMessage(
-            "autoMessage",
-            data.message ||
-            (
-                autoTradingEnabled
-                    ? "AI auto-trading enabled."
-                    : "AI auto-trading disabled."
-            ),
-            "success"
-        );
-
-
-    } catch (error) {
-
-        /*
-           This deliberately exposes the actual
-           backend/browser error instead of only
-           saying "Unable to change AI trading status."
-        */
-
-        setTradeMessage(
-            "autoMessage",
-            `Auto-trading error: ${error.message}`,
-            "error"
-        );
-
-        console.error(
-            "AUTO TOGGLE ERROR:",
-            error
-        );
-
-    } finally {
-
-        if (button) {
-            button.disabled = false;
-        }
+    if (button) {
+        button.disabled = false;
     }
 }
 
+}
 
 /* =========================================================
-   RUN AUTO TRADING
+RUN AUTO TRADING
 ========================================================= */
 
 async function runAutoTrading() {
 
-    try {
+try {
 
-        const data =
-            await apiRequest(
-                "/api/auto-trading/run",
-                {
-                    method: "POST"
-                }
-            );
-
-
-        if (data.message) {
-
-            setTradeMessage(
-                "autoMessage",
-                data.message,
-                "success"
-            );
-        }
+    const data =
+        await apiRequest(
+            "/api/auto-trading/run",
+            {
+                method: "POST"
+            }
+        );
 
 
-        await fetchPaperAccount();
-        await fetchAutoTradingStatus();
-
-    } catch (error) {
+    if (data.message) {
 
         setTradeMessage(
             "autoMessage",
-            `Auto-trading run failed: ${error.message}`,
-            "error"
-        );
-
-        console.error(
-            "Auto trading run failed:",
-            error
+            data.message,
+            "success"
         );
     }
+
+
+    await fetchPaperAccount();
+    await fetchAutoTradingStatus();
+    await fetchTradeHistory();
+
+} catch (error) {
+
+    setTradeMessage(
+        "autoMessage",
+        `Auto-trading run failed: ${error.message}`,
+        "error"
+    );
+
+    console.error(
+        "Auto trading run failed:",
+        error
+    );
 }
 
+}
 
 /* =========================================================
-   TRADE STATS
+TRADE STATS
 ========================================================= */
 
 function updateTradeStats(data) {
 
-    const trades =
-        Number(
-            data.trades ||
-            0
-        );
+const trades =
+    Number(
+        data.trades ||
+        0
+    );
 
 
-    if ($("tradeCount")) {
+if ($("tradeCount")) {
 
-        $("tradeCount").textContent =
-            `${trades} ${trades === 1 ? "trade" : "trades"}`;
-    }
+    $("tradeCount").textContent =
+        `${trades} ${trades === 1 ? "trade" : "trades"}`;
 }
 
+}
 
 /* =========================================================
-   TRADE HISTORY
+TRADE HISTORY
 ========================================================= */
 
 async function fetchTradeHistory() {
 
-    /*
-       The current backend may not expose a
-       /api/trades endpoint yet.
+try {
 
-       We intentionally do not generate fake
-       trade records.
-    */
-
-    try {
-
-        const data =
-            await apiRequest(
-                "/api/trades"
-            );
-
-        renderTradeHistory(data);
-
-    } catch (error) {
-
-        /*
-           Keep the dashboard usable when the
-           endpoint has not been added yet.
-        */
-
-        console.info(
-            "Trade history endpoint not available yet."
+    const data =
+        await apiRequest(
+            "/api/trades"
         );
-    }
+
+    renderTradeHistory(data);
+
+} catch (error) {
+
+    console.info(
+        "Trade history unavailable:",
+        error.message
+    );
 }
 
+}
 
 function renderTradeHistory(data) {
 
-    const table =
-        $("tradeHistory");
+const table =
+    $("tradeHistory");
 
-    if (!table) {
-        return;
-    }
-
-
-    const trades =
-        Array.isArray(data)
-            ? data
-            : Array.isArray(data.trades)
-                ? data.trades
-                : [];
-
-
-    if (trades.length === 0) {
-
-        table.innerHTML = `
-            <tr>
-                <td colspan="5">
-                    No trades recorded yet.
-                </td>
-            </tr>
-        `;
-
-        return;
-    }
-
-
-    table.innerHTML =
-        trades
-            .slice()
-            .reverse()
-            .map(trade => {
-
-                const action =
-                    String(
-                        trade.action ||
-                        trade.side ||
-                        "UNKNOWN"
-                    ).toUpperCase();
-
-
-                const price =
-                    Number(
-                        trade.price ||
-                        trade.entry_price ||
-                        0
-                    );
-
-
-                const quantity =
-                    Number(
-                        trade.quantity ||
-                        trade.qty ||
-                        0
-                    );
-
-
-                const status =
-                    trade.status ||
-                    "OPEN";
-
-
-                return `
-                    <tr>
-
-                        <td class="${
-                            action === "BUY"
-                                ? "trade-buy"
-                                : "trade-sell"
-                        }">
-                            ${escapeHtml(action)}
-                        </td>
-
-                        <td>
-                            BTC / USD
-                        </td>
-
-                        <td>
-                            ${formatCurrency(price)}
-                        </td>
-
-                        <td>
-                            ${formatNumber(quantity, 8)}
-                        </td>
-
-                        <td>
-                            ${escapeHtml(
-                                String(status).toUpperCase()
-                            )}
-                        </td>
-
-                    </tr>
-                `;
-
-            })
-            .join("");
+if (!table) {
+    return;
 }
 
 
+const trades =
+    Array.isArray(data)
+        ? data
+        : Array.isArray(data.trades)
+            ? data.trades
+            : [];
+
+
+if (trades.length === 0) {
+
+    table.innerHTML = `
+        <tr>
+            <td colspan="5">
+                No trades recorded yet.
+            </td>
+        </tr>
+    `;
+
+    return;
+}
+
+
+table.innerHTML =
+    trades
+        .slice()
+        .reverse()
+        .map(trade => {
+
+            const action =
+                String(
+                    trade.action ||
+                    trade.side ||
+                    "UNKNOWN"
+                ).toUpperCase();
+
+
+            const price =
+                Number(
+                    trade.price ||
+                    trade.entry_price ||
+                    0
+                );
+
+
+            const quantity =
+                Number(
+                    trade.quantity ||
+                    trade.qty ||
+                    0
+                );
+
+
+            const status =
+                trade.status ||
+                "OPEN";
+
+
+            return `
+                <tr>
+
+                    <td class="${
+                        action === "BUY"
+                            ? "trade-buy"
+                            : "trade-sell"
+                    }">
+                        ${escapeHtml(action)}
+                    </td>
+
+                    <td>
+                        BTC / USD
+                    </td>
+
+                    <td>
+                        ${formatCurrency(price)}
+                    </td>
+
+                    <td>
+                        ${formatNumber(quantity, 8)}
+                    </td>
+
+                    <td>
+                        ${escapeHtml(
+                            String(status).toUpperCase()
+                        )}
+                    </td>
+
+                </tr>
+            `;
+
+        })
+        .join("");
+
+}
+
 /* =========================================================
-   BACKTEST
+BACKTEST
 ========================================================= */
 
 async function runBacktest() {
 
-    const button =
-        $("backtestButton");
+const button =
+    $("backtestButton");
 
 
-    const asset =
-        $("assetSelect")
-            ? $("assetSelect").value
-            : "BTCUSDT";
+const asset =
+    $("assetSelect")
+        ? $("assetSelect").value
+        : "BTCUSDT";
 
 
-    const strategy =
-        $("strategySelect")
-            ? $("strategySelect").value
-            : "rsi_ma";
+const strategy =
+    $("strategySelect")
+        ? $("strategySelect").value
+        : "rsi_ma";
 
 
-    const capital =
-        $("initialCapital")
-            ? Number(
-                $("initialCapital").value
-            )
-            : 10000;
+const capital =
+    $("initialCapital")
+        ? Number(
+            $("initialCapital").value
+        )
+        : 10000;
 
 
-    if (button) {
+if (
+    !Number.isFinite(capital) ||
+    capital <= 0
+) {
 
-        button.disabled = true;
-        button.textContent =
-            "RUNNING...";
-    }
+    setBacktestError(
+        "Please enter a valid initial capital amount."
+    );
 
-
-    const result =
-        $("backtestResult");
-
-
-    if (result) {
-
-        result.innerHTML = `
-            <span class="card-label">
-                BACKTESTING
-            </span>
-
-            <p>
-                Running ${escapeHtml(strategy)}
-                on ${escapeHtml(asset)}...
-            </p>
-        `;
-    }
-
-
-    try {
-
-        const data =
-            await apiRequest(
-                "/api/backtest",
-                {
-                    method: "POST",
-
-                    body: JSON.stringify({
-                        asset: asset,
-                        strategy: strategy,
-                        initial_capital: capital
-                    })
-                }
-            );
-
-
-        renderBacktestResult(data);
-
-    } catch (error) {
-
-        if (result) {
-
-            result.innerHTML = `
-                <span class="card-label">
-                    BACKTEST ERROR
-                </span>
-
-                <p>
-                    ${escapeHtml(error.message)}
-                </p>
-            `;
-        }
-
-    } finally {
-
-        if (button) {
-
-            button.disabled = false;
-            button.textContent =
-                "RUN BACKTEST";
-        }
-    }
+    return;
 }
 
 
-function renderBacktestResult(data) {
+if (button) {
 
-    const result =
-        $("backtestResult");
-
-    if (!result) {
-        return;
-    }
+    button.disabled = true;
+    button.textContent =
+        "RUNNING...";
+}
 
 
-    const returnValue =
-        data.return ??
-        data.net_return ??
-        data.total_return;
+const result =
+    $("backtestResult");
 
 
-    const finalValue =
-        data.final_value ??
-        data.final_balance ??
-        data.portfolio_value;
-
-
-    const winRate =
-        data.win_rate;
-
-
-    const trades =
-        data.trades ??
-        data.total_trades;
-
+if (result) {
 
     result.innerHTML = `
-
         <span class="card-label">
-            BACKTEST COMPLETE
+            BACKTESTING
         </span>
 
-        <div class="result-grid">
-
-            <div class="result-item">
-
-                <span>
-                    RETURN
-                </span>
-
-                <strong>
-                    ${
-                        returnValue !== undefined
-                            ? formatPercent(returnValue)
-                            : "—"
-                    }
-                </strong>
-
-            </div>
-
-
-            <div class="result-item">
-
-                <span>
-                    FINAL VALUE
-                </span>
-
-                <strong>
-                    ${
-                        finalValue !== undefined
-                            ? formatCurrency(finalValue)
-                            : "—"
-                    }
-                </strong>
-
-            </div>
-
-
-            <div class="result-item">
-
-                <span>
-                    WIN RATE
-                </span>
-
-                <strong>
-                    ${
-                        winRate !== undefined
-                            ? `${Number(winRate).toFixed(2)}%`
-                            : "—"
-                    }
-                </strong>
-
-            </div>
-
-
-            <div class="result-item">
-
-                <span>
-                    TRADES
-                </span>
-
-                <strong>
-                    ${
-                        trades !== undefined
-                            ? trades
-                            : "—"
-                    }
-                </strong>
-
-            </div>
-
-        </div>
+        <p>
+            Running ${escapeHtml(strategy)}
+            on ${escapeHtml(asset)}...
+        </p>
     `;
 }
 
 
-/* =========================================================
-   MESSAGE HELPER
-========================================================= */
+try {
 
-function setTradeMessage(
-    elementId,
-    message,
-    type
-) {
+    const data =
+        await apiRequest(
+            "/api/backtest",
+            {
+                method: "POST",
 
-    const element =
-        $(elementId);
+                body: JSON.stringify({
+                    asset: asset,
+                    strategy: strategy,
+                    initial_capital: capital
+                })
+            }
+        );
 
-    if (!element) {
-        return;
-    }
 
-    element.textContent =
-        message;
+    renderBacktestResult(data);
 
-    element.classList.remove(
-        "success",
-        "error"
+} catch (error) {
+
+    setBacktestError(
+        error.message
     );
 
-    if (type) {
+} finally {
 
-        element.classList.add(
-            type
-        );
+    if (button) {
+
+        button.disabled = false;
+        button.textContent =
+            "RUN BACKTEST";
     }
 }
 
+}
+
+function setBacktestError(message) {
+
+const result =
+    $("backtestResult");
+
+if (!result) {
+    return;
+}
+
+result.innerHTML = `
+    <span class="card-label">
+        BACKTEST ERROR
+    </span>
+
+    <p>
+        ${escapeHtml(message)}
+    </p>
+`;
+
+}
+
+function renderBacktestResult(data) {
+
+const result =
+    $("backtestResult");
+
+if (!result) {
+    return;
+}
+
+
+const returnValue =
+    data.return ??
+    data.net_return ??
+    data.total_return;
+
+
+const finalValue =
+    data.final_value ??
+    data.final_balance ??
+    data.portfolio_value;
+
+
+const winRate =
+    data.win_rate;
+
+
+const trades =
+    data.trades ??
+    data.total_trades;
+
+
+result.innerHTML = `
+
+    <span class="card-label">
+        BACKTEST COMPLETE
+    </span>
+
+    <div class="result-grid">
+
+        <div class="result-item">
+
+            <span>RETURN</span>
+
+            <strong>
+                ${
+                    returnValue !== undefined
+                        ? formatPercent(returnValue)
+                        : "—"
+                }
+            </strong>
+
+        </div>
+
+
+        <div class="result-item">
+
+            <span>FINAL VALUE</span>
+
+            <strong>
+                ${
+                    finalValue !== undefined
+                        ? formatCurrency(finalValue)
+                        : "—"
+                }
+            </strong>
+
+        </div>
+
+
+        <div class="result-item">
+
+            <span>WIN RATE</span>
+
+            <strong>
+                ${
+                    winRate !== undefined
+                        ? `${Number(winRate).toFixed(2)}%`
+                        : "—"
+                }
+            </strong>
+
+        </div>
+
+
+        <div class="result-item">
+
+            <span>TRADES</span>
+
+            <strong>
+                ${
+                    trades !== undefined
+                        ? trades
+                        : "—"
+                }
+            </strong>
+
+        </div>
+
+    </div>
+`;
+
+}
 
 /* =========================================================
-   HTML ESCAPE
+MESSAGE HELPER
+========================================================= */
+
+function setTradeMessage(
+elementId,
+message,
+type
+) {
+
+const element =
+    $(elementId);
+
+if (!element) {
+    return;
+}
+
+element.textContent =
+    message;
+
+element.classList.remove(
+    "success",
+    "error"
+);
+
+if (type) {
+
+    element.classList.add(
+        type
+    );
+}
+
+}
+
+/* =========================================================
+HTML ESCAPE
 ========================================================= */
 
 function escapeHtml(value) {
 
-    return String(value)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
+return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+
 }
 
-
 /* =========================================================
-   EVENT LISTENERS
+EVENT LISTENERS
 ========================================================= */
 
 function setupEvents() {
 
-    const buyButton =
-        $("buyButton");
+const buyButton =
+    $("buyButton");
 
-    const sellButton =
-        $("sellButton");
+const sellButton =
+    $("sellButton");
 
-    const autoToggleButton =
-        $("autoToggleButton");
+const autoToggleButton =
+    $("autoToggleButton");
 
-    const backtestButton =
-        $("backtestButton");
-
-
-    if (buyButton) {
-
-        buyButton.addEventListener(
-            "click",
-            paperBuy
-        );
-    }
+const backtestButton =
+    $("backtestButton");
 
 
-    if (sellButton) {
+if (buyButton) {
 
-        sellButton.addEventListener(
-            "click",
-            paperSell
-        );
-    }
-
-
-    if (autoToggleButton) {
-
-        autoToggleButton.addEventListener(
-            "click",
-            toggleAutoTrading
-        );
-    }
-
-
-    if (backtestButton) {
-
-        backtestButton.addEventListener(
-            "click",
-            runBacktest
-        );
-    }
+    buyButton.addEventListener(
+        "click",
+        paperBuy
+    );
 }
 
 
+if (sellButton) {
+
+    sellButton.addEventListener(
+        "click",
+        paperSell
+    );
+}
+
+
+if (autoToggleButton) {
+
+    autoToggleButton.addEventListener(
+        "click",
+        toggleAutoTrading
+    );
+}
+
+
+if (backtestButton) {
+
+    backtestButton.addEventListener(
+        "click",
+        runBacktest
+    );
+}
+
+}
+
 /* =========================================================
-   INITIAL DATA LOAD
+INITIAL DATA LOAD
 ========================================================= */
 
 async function loadDashboard() {
 
-    await Promise.allSettled([
-        fetchMarket(),
-        fetchSignal(),
-        fetchPaperAccount(),
-        fetchAutoTradingStatus(),
-        fetchTradeHistory()
-    ]);
+await Promise.allSettled([
+    fetchMarket(),
+    fetchSignal(),
+    fetchPaperAccount(),
+    fetchAutoTradingStatus(),
+    fetchTradeHistory()
+]);
+
 }
 
-
 /* =========================================================
-   REFRESH LOOPS
+REFRESH LOOPS
 ========================================================= */
 
 function startRefreshLoops() {
 
-    /*
-       Market:
-       every 10 seconds
-    */
+/*
+   Market data:
+   synchronized with backend v1.5.2
+   cache/collector interval.
+*/
 
-    setInterval(() => {
+setInterval(() => {
 
-        fetchMarket();
+    fetchMarket();
 
-    }, 10000);
-
-
-    /*
-       AI signal:
-       every 30 seconds
-    */
-
-    setInterval(() => {
-
-        fetchSignal();
-
-    }, 30000);
+}, MARKET_REFRESH_MS);
 
 
-    /*
-       Paper portfolio:
-       every 10 seconds
-    */
+/*
+   AI signal:
+   every 30 seconds.
+*/
 
-    setInterval(() => {
+setInterval(() => {
 
-        fetchPaperAccount();
+    fetchSignal();
 
-    }, 10000);
-
-
-    /*
-       Auto trading status:
-       every 10 seconds
-    */
-
-    setInterval(() => {
-
-        fetchAutoTradingStatus();
-
-    }, 10000);
+}, SIGNAL_REFRESH_MS);
 
 
-    /*
-       Trade history:
-       every 15 seconds
-    */
+/*
+   Paper portfolio:
+   every 10 seconds.
+*/
 
-    setInterval(() => {
+setInterval(() => {
 
-        fetchTradeHistory();
+    fetchPaperAccount();
 
-    }, 15000);
+}, PORTFOLIO_REFRESH_MS);
+
+
+/*
+   Auto-trading status:
+   every 10 seconds.
+*/
+
+setInterval(() => {
+
+    fetchAutoTradingStatus();
+
+}, AUTO_STATUS_REFRESH_MS);
+
+
+/*
+   Trade history:
+   every 15 seconds.
+*/
+
+setInterval(() => {
+
+    fetchTradeHistory();
+
+}, TRADE_HISTORY_REFRESH_MS);
+
 }
 
-
 /* =========================================================
-   START UPUPWAY AI
+START UPUPWAY AI
 ========================================================= */
 
 async function startUpUpwayAI() {
 
-    console.log(
-        "========================================"
-    );
+console.log(
+    "========================================"
+);
 
-    console.log(
-        "UPUPWAY AI FRONTEND STARTING"
-    );
+console.log(
+    "UPUPWAY AI FRONTEND STARTING"
+);
 
-    console.log(
-        "API:",
-        API_BASE_URL
-    );
+console.log(
+    "FRONTEND VERSION: 1.6.0"
+);
 
-    console.log(
-        "MODE: PAPER TRADING"
-    );
+console.log(
+    "API:",
+    API_BASE_URL
+);
 
-    console.log(
-        "========================================"
-    );
+console.log(
+    "MODE: PAPER TRADING"
+);
+
+console.log(
+    "MARKET REFRESH:",
+    `${MARKET_REFRESH_MS / 1000}s`
+);
+
+console.log(
+    "========================================"
+);
 
 
-    setupMobileMenu();
+setupMobileMenu();
 
-    setupEvents();
+setupEvents();
 
-    await loadDashboard();
+setMarketConnecting();
 
-    startRefreshLoops();
+await loadDashboard();
+
+startRefreshLoops();
+
 }
 
-
 /* =========================================================
-   START
+START
 ========================================================= */
 
 document.addEventListener(
-    "DOMContentLoaded",
-    startUpUpwayAI
+"DOMContentLoaded",
+startUpUpwayAI
 );
